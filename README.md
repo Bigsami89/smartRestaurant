@@ -37,10 +37,17 @@ Este proyecto está construido con un stack tecnológico de vanguardia:
    ```
 
 3. **Configurar el entorno:**
-   Crea un archivo `.env` en la raíz del proyecto y añade las variables necesarias (Base de Datos, Secretos de Auth, etc.).
+   Crea un archivo `.env` en la raíz del proyecto. Este archivo contiene las credenciales sensibles y configuraciones de conexión.
+   
    ```env
-   DATABASE_URL="file:./dev.db"
-   AUTH_SECRET="tu_secreto_aqui"
+   # Conexión a la base de datos (PostgreSQL)
+   DATABASE_URL="postgresql://usuario:password@localhost:5432/smart_restaurant?schema=public"
+
+   # Secreto para la autenticación (puedes generar uno con: openssl rand -base64 32)
+   AUTH_SECRET="tu_secreto_super_seguro_aqui"
+
+   # URL base de la aplicación (solo necesaria en entornos específicos o servidores proxy)
+   # AUTH_URL="http://localhost:3000"
    ```
 
 4. **Preparar la Base de Datos:**
