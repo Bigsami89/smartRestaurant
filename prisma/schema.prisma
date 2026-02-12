@@ -1,0 +1,302 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String           @id @default(cuid())
+  name            String?
+  email           String?          @unique
+  emailVerified   DateTime?
+  image           String?
+  role            String           @default("mesero")
+  password        String?
+  active          Boolean          @default(true)
+  isSuperuser     Boolean          @default(false)
+  isDeletable     Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  tenantId        String           @default("default")
+  tenantName      String?
+  branchId        String?
+  branch          Branch?          @relation(fields: [branchId], references: [id])
+  accounts        Account[]
+  shifts          CashShift[]      @relation("ShiftOpenedBy")
+  shiftsClosed    CashShift[]      @relation("ShiftClosedBy")
+  sessions        Session[]
+  supplyMovements SupplyMovement[]
+  ordersCreated   Order[]          @relation("OrderCreatedBy")
+  ordersClosed    Order[]          @relation("OrderClosedBy")
+
+  @@map("users")
+}
+
+model Branch {
+  id          String      @id @default(cuid())
+  name        String
+  address     String?
+  phone       String?
+  tenantId    String      @default("default")
+  isActive    Boolean     @default(true)
+  shareMenu   Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  users       User[]
+  tables      Table[]
+  orders      Order[]
+  cashShifts  CashShift[]
+  products    Product[]
+  supplies    Supply[]
+  reservations Reservation[]
+
+  @@map("branches")
+}
+
+model Reservation {
+  id            String   @id @default(cuid())
+  date          DateTime
+  customerName  String
+  customerPhone String?
+  partySize     Int
+  status        String   @default("pending") // pending, confirmed, cancelled, completed
+  notes         String?
+  
+  branchId      String
+  branch        Branch   @relation(fields: [branchId], references: [id])
+  
+  tableId       String?
+  table         Table?   @relation(fields: [tableId], references: [id])
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("reservations")
+}
+
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model Product {
+  id          String              @id @default(cuid())
+  name        String
+  category    String
+  price       Float
+  description String?
+  image       String?
+
+  available   Boolean             @default(true)
+  requiresKitchen Boolean         @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  branchId    String?
+  branch      Branch?             @relation(fields: [branchId], references: [id])
+  orderItems  OrderItem[]
+  extras      ProductExtra[]
+  ingredients ProductIngredient[]
+
+  @@map("products")
+}
+
+model ProductExtra {
+  id              String           @id @default(cuid())
+  name            String
+  price           Float
+  productId       String
+  orderItemExtras OrderItemExtra[]
+  product         Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_extras")
+}
+
+model ProductIngredient {
+  id        String  @id @default(cuid())
+  name      String
+  removable Boolean @default(true)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_ingredients")
+}
+
+model Table {
+  id             String  @id @default(cuid())
+  number         Int     @unique
+  seats          Int
+  zone           String
+  status         String  @default("available") // available, occupied, reserved, billing
+  branchId       String?
+  branch         Branch? @relation(fields: [branchId], references: [id])
+  reservations   Reservation[]
+  orders         Order[]
+
+  @@map("tables")
+}
+
+model Order {
+  id               String      @id @default(cuid())
+  tableId          String?
+  tableNumber      Int?
+  status           String      @default("open")
+  total            Float       @default(0)
+  paymentMethod    String?
+  source           String?     @default("direct")
+  createdAt        DateTime    @default(now())
+  closedAt         DateTime?
+  cashShiftId      String?
+  transactionFolio String?
+  tip              Float       @default(0)
+  invoiced         Boolean     @default(false)
+  createdById      String?
+  closedById       String?
+  branchId         String?
+  updatedAt        DateTime    @updatedAt
+  branch           Branch?     @relation(fields: [branchId], references: [id])
+  items            OrderItem[]
+  cashShift        CashShift?  @relation(fields: [cashShiftId], references: [id])
+  table            Table?      @relation(fields: [tableId], references: [id])
+  createdBy        User?       @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  closedBy         User?       @relation("OrderClosedBy", fields: [closedById], references: [id])
+
+  @@map("orders")
+}
+
+model CashShift {
+  id           String    @id @default(cuid())
+  openedAt     DateTime  @default(now())
+  closedAt     DateTime?
+  startAmount  Float
+  endAmount    Float?
+  expectedCash Float?    @default(0)
+  expectedCard Float?    @default(0)
+  difference   Float?
+  status       String    @default("open")
+  userId       String
+  closedById   String?
+  branchId     String?
+  branch       Branch?   @relation(fields: [branchId], references: [id])
+  user         User      @relation("ShiftOpenedBy", fields: [userId], references: [id])
+  closedByUser User?     @relation("ShiftClosedBy", fields: [closedById], references: [id])
+  orders       Order[]
+
+  @@map("cash_shifts")
+}
+
+model OrderItem {
+  id                 String           @id @default(cuid())
+  orderId            String
+  productId          String
+  productName        String
+  quantity           Int
+  unitPrice          Float
+  totalPrice         Float
+  status             String           @default("pending")
+  notes              String?
+  dinerIndex         Int              @default(0)
+  removedIngredients String[]
+  extras             OrderItemExtra[]
+  order              Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product            Product          @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+model OrderItemExtra {
+  id          String       @id @default(cuid())
+  orderItemId String
+  extraId     String
+  name        String
+  price       Float
+  extra       ProductExtra @relation(fields: [extraId], references: [id])
+  orderItem   OrderItem    @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@map("order_item_extras")
+}
+
+model Supply {
+  id          String           @id @default(cuid())
+  name        String
+  category    String
+  unit        String
+  stock       Float
+  minStock    Float
+  costPerUnit Float
+  branchId    String?
+  branch      Branch?          @relation(fields: [branchId], references: [id])
+  movements   SupplyMovement[]
+
+  @@map("supplies")
+}
+
+model SupplyMovement {
+  id        String   @id @default(cuid())
+  supplyId  String
+  type      String
+  quantity  Float
+  reason    String?
+  createdAt DateTime @default(now())
+  userId    String?
+  supply    Supply   @relation(fields: [supplyId], references: [id], onDelete: Cascade)
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@map("supply_movements")
+}
+
+model ConfigList {
+  id    String           @id @default(cuid())
+  name  String           @unique // "order_sources", "categories", "zones"
+  items ConfigListItem[]
+
+  @@map("config_lists")
+}
+
+model ConfigListItem {
+  id        String     @id @default(cuid())
+  listId    String
+  value     String
+  label     String
+  active    Boolean    @default(true)
+  sortOrder Int        @default(0)
+  list      ConfigList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@map("config_list_items")
+}
