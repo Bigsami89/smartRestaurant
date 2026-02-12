@@ -70,5 +70,31 @@ La aplicación estará disponible en [http://localhost:3000](http://localhost:30
 - `npm run lint`: Ejecuta el linter para encontrar y corregir problemas de código.
 - `npm run test:backend`: Ejecuta scripts de prueba para el backend.
 
+## ✨ Funcionalidades Principales
+
+- **Gestión de Mesas:** Control de estado (libre, ocupada, reservada, facturando).
+- **Punto de Venta (POS):** Toma de pedidos directa y por mesas, manejo de propinas y métodos de pago.
+- **Inventario:** Control de productos, insumos y movimientos de stock.
+- **Cocina:** Interfaz en tiempo real para la preparación de pedidos.
+- **Reservaciones:** Sistema de reservas con validación de horarios.
+- **Administración:** Gestión de empleados, sucursales y reportes de ventas.
+- **Corte de Caja:** Apertura y cierre de turnos con balance de efectivo y tarjeta.
+
+## 🚧 Funcionalidades Faltantes (Roadmap)
+
+- [ ] **Facturación Electrónica:** Integración con servicios de facturación local.
+- [ ] **Notificaciones Push:** Avisos a meseros cuando los platillos estén listos.
+- [ ] **Módulo de Proveedores:** Gestión de compras y cuentas por pagar.
+- [ ] **App de Comanda Móvil:** Optimización de la interfaz para dispositivos móviles de meseros.
+- [ ] **Fidelización de Clientes:** Sistema de puntos y descuentos por cliente frecuente.
+- [ ] **Multi-idioma:** Soporte para inglés y otros idiomas.
+
+## 🔍 Áreas por Buscar / Investigar
+
+- **Optimización de Consultas:** Revisar el rendimiento de Prisma en reportes de ventas históricos de gran volumen.
+- **Escalabilidad WebSockets:** Evaluar la implementación de actualizaciones en tiempo real (Socket.io o alternativas) para mayor concurrencia en cocina.
+- **Seguridad Avanzada:** Auditoría de roles y permisos granulares por sucursal.
+- **Integración con Hardware:** Impresoras térmicas (protocolo ESC/POS) para tickets de cocina y clientes.
+
 ---
 Desarrollado con ❤️ para la gestión inteligente de restaurantes.
