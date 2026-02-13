@@ -6,7 +6,7 @@ export async function getInitialData(): Promise<RestaurantState> {
     const thirtyDaysAgo = new Date()
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
 
-    const [tables, products, orders, employees, supplies, supplyMovements, shift, cashShifts, configLists, branches, reservations] = await Promise.all([
+    const [tables, products, orders, employees, supplies, supplyMovements, shift, cashShifts, configLists, branches, reservations, rawDinerNames] = await Promise.all([
         prisma.table.findMany({ orderBy: { number: 'asc' } }),
         prisma.product.findMany({ include: { extras: true, ingredients: true }, orderBy: { name: 'asc' } }),
         prisma.order.findMany({
@@ -16,7 +16,7 @@ export async function getInitialData(): Promise<RestaurantState> {
                     { createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } } // Today's orders
                 ]
             },
-            include: { items: { include: { extras: true } } },
+            include: { items: { include: { extras: true, product: true } } },
             orderBy: { createdAt: 'desc' }
         }),
         prisma.user.findMany({ include: { branch: true } }), // Employees are Users with branch
@@ -35,7 +35,8 @@ export async function getInitialData(): Promise<RestaurantState> {
         }),
         prisma.configList.findMany({ include: { items: { orderBy: { sortOrder: 'asc' } } } }),
         prisma.branch.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } }),
-        prisma.reservation.findMany({ orderBy: { date: 'asc' } })
+        prisma.reservation.findMany({ orderBy: { date: 'asc' } }),
+        prisma.$queryRaw`SELECT id, "dinerNames" FROM "orders"` as Promise<{ id: string, dinerNames: string[] }[]>
     ])
 
     const serializeDate = (d: Date | null) => d ? d.toISOString() : null
@@ -56,10 +57,14 @@ export async function getInitialData(): Promise<RestaurantState> {
     })) as unknown as Product[]
 
     const serializedOrders = orders.map((o: any) => {
+        const raw = rawDinerNames.find((r) => r.id === o.id)
+        const realDinerNames = raw?.dinerNames || o.dinerNames || []
+
         const createdByEmployee = employees.find((e: any) => e.id === o.createdById)
         const closedByEmployee = employees.find((e: any) => e.id === o.closedById)
         return {
             ...o,
+            dinerNames: realDinerNames, // Force correct names
             createdAt: serializeDate(o.createdAt),
             closedAt: serializeDate(o.closedAt),
             createdByName: createdByEmployee?.name || null,
@@ -67,6 +72,15 @@ export async function getInitialData(): Promise<RestaurantState> {
             items: o.items.map((i: any) => ({
                 ...i,
                 removedIngredients: i.removedIngredients as unknown as string[],
+                product: i.product ? {
+                    ...i.product,
+                    createdAt: serializeDate(i.product.createdAt),
+                    updatedAt: serializeDate(i.product.updatedAt),
+                    unit: i.product.unit,
+                    branchId: i.product.branchId || null,
+                    extras: i.product.extras || [],
+                    ingredients: i.product.ingredients || []
+                } : undefined,
             })),
             branchId: o.branchId || null
         }

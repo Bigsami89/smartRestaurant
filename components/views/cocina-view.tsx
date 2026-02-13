@@ -1,6 +1,6 @@
 "use client"
 
-import React from "react"
+import React, { useMemo } from "react"
 
 import { useStore } from "@/lib/spa-store"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,7 +28,7 @@ export function CocinaView() {
 
   // Group by order, not individual items - filter by current branch
   const kitchenOrders: KitchenOrder[] = state.orders
-    .filter(o => (o.status === "open" || o.status === "closed") && o.branchId === state.currentBranchId)
+    .filter(o => (o.status === "open" || o.status === "closed") && (!o.branchId || o.branchId === state.currentBranchId))
     .map(o => ({
       ...o,
       kitchenItems: o.items.filter((i: any) => i.status !== "delivered" && i.product?.requiresKitchen !== false)
@@ -78,6 +78,18 @@ export function CocinaView() {
     const status = getOrderStatus(order.kitchenItems)
     const Icon = statusIcons[status]
 
+    const itemsByDiner = useMemo(() => {
+      const groups: Record<number, OrderItem[]> = {}
+      order.kitchenItems.forEach(i => {
+        const idx = i.dinerIndex ?? 0
+        if (!groups[idx]) groups[idx] = []
+        groups[idx].push(i)
+      })
+      return groups
+    }, [order.kitchenItems])
+
+    const dinerIndices = Object.keys(itemsByDiner).map(Number).sort((a, b) => a - b)
+
     return (
       <Card className="shadow-sm">
         <CardHeader className="p-3 pb-2 flex flex-row items-center justify-between space-y-0">
@@ -92,27 +104,34 @@ export function CocinaView() {
           </Badge>
         </CardHeader>
         <CardContent className="p-3 pt-0">
-          <div className="flex flex-col gap-2 mb-3">
-            {order.kitchenItems.map(item => (
-              <div key={item.id} className="flex items-start gap-2 text-sm border-l-2 border-muted pl-2">
-                <span className="font-medium">{item.quantity}x</span>
-                <div className="flex-1">
-                  <p className="leading-tight">{item.productName}</p>
-                  {item.extras.length > 0 && (
-                    <p className="text-[11px] text-muted-foreground flex flex-wrap gap-1 mt-0.5">
-                      {item.extras.map(e => <span key={e.id} className="bg-muted px-1 rounded-sm">+{e.name}</span>)}
-                    </p>
-                  )}
-                  {item.removedIngredients.length > 0 && (
-                    <p className="text-[11px] text-destructive">Sin {item.removedIngredients.join(", ")}</p>
-                  )}
-                  {item.notes && (
-                    <p className="text-[11px] italic text-muted-foreground bg-accent/10 p-1 rounded-sm border-l-2 border-accent mt-1">{item.notes}</p>
-                  )}
+          <div className="flex flex-col gap-3 mb-3">
+            {dinerIndices.map(dIdx => (
+              <div key={dIdx} className="flex flex-col gap-2">
+                <div className="text-[10px] font-bold text-muted-foreground uppercase bg-muted/40 p-1 rounded flex justify-between">
+                  <span>{order.dinerNames?.[dIdx] || `Comensal ${dIdx + 1}`}</span>
                 </div>
-                <Badge variant={item.status === "ready" ? "secondary" : "outline"} className="text-[9px] shrink-0">
-                  {statusLabel[item.status]}
-                </Badge>
+                {itemsByDiner[dIdx].map(item => (
+                  <div key={item.id} className="flex items-start gap-2 text-sm border-l-2 border-muted pl-2">
+                    <span className="font-medium">{item.quantity}x</span>
+                    <div className="flex-1">
+                      <p className="leading-tight">{item.productName}</p>
+                      {item.extras.length > 0 && (
+                        <p className="text-[11px] text-muted-foreground flex flex-wrap gap-1 mt-0.5">
+                          {item.extras.map(e => <span key={e.id} className="bg-muted px-1 rounded-sm">+{e.name}</span>)}
+                        </p>
+                      )}
+                      {item.removedIngredients.length > 0 && (
+                        <p className="text-[11px] text-destructive">Sin {item.removedIngredients.join(", ")}</p>
+                      )}
+                      {item.notes && (
+                        <p className="text-[11px] italic text-muted-foreground bg-accent/10 p-1 rounded-sm border-l-2 border-accent mt-1">{item.notes}</p>
+                      )}
+                    </div>
+                    <Badge variant={item.status === "ready" ? "secondary" : "outline"} className="text-[9px] shrink-0">
+                      {statusLabel[item.status]}
+                    </Badge>
+                  </div>
+                ))}
               </div>
             ))}
           </div>

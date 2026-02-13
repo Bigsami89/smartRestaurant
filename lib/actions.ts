@@ -9,8 +9,8 @@ import bcrypt from "bcryptjs"
 // --- Tables ---
 
 const TableSchema = z.object({
-    number: z.coerce.number(),
-    seats: z.coerce.number(),
+    number: z.coerce.number().min(1, "El número debe ser positivo"),
+    seats: z.coerce.number().min(1, "Debe tener al menos 1 asiento"),
     zone: z.string(),
     status: z.enum(["available", "occupied", "reserved", "billing"]).optional()
 })
@@ -66,6 +66,48 @@ export async function updateTableStatus(id: string, status: string) {
         return { success: true }
     } catch (error) {
         return { success: false, error: "Failed to update status" }
+    }
+}
+
+export async function updateTable(id: string, data: { number: number; seats: number; zone: string }) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "admin") {
+        return { success: false, error: "Unauthorized" }
+    }
+
+    const validated = TableSchema.safeParse(data)
+    if (!validated.success) {
+        return { success: false, error: "Invalid fields" }
+    }
+
+    try {
+        // Check if another table has the same number
+        const existing = await prisma.table.findUnique({
+            where: { number: validated.data.number }
+        })
+
+        if (existing && existing.id !== id) {
+            return { success: false, error: "Esta mesa ya está creada" }
+        }
+
+        await prisma.table.update({
+            where: { id },
+            data: {
+                number: validated.data.number,
+                seats: validated.data.seats,
+                zone: validated.data.zone,
+            }
+        })
+        revalidatePath("/")
+        revalidatePath("/mesas")
+        return { success: true }
+    } catch (error) {
+        console.error(error)
+        // Handle unique constraint error if race condition occurs
+        if ((error as any).code === 'P2002') {
+            return { success: false, error: "Esta mesa ya está creada" }
+        }
+        return { success: false, error: "Failed to update table" }
     }
 }
 
@@ -207,7 +249,7 @@ export async function toggleProductAvailability(id: string, available: boolean) 
 
 // --- Orders ---
 
-export async function submitOrder(tableId: string | null, items: any[], source: string = "direct", branchId?: string) {
+export async function submitOrder(tableId: string | null, items: any[], source: string = "direct", branchId?: string, dinerNames: string[] = []) {
     try {
         const session = await auth()
         if (!session?.user) return { success: false, error: "Unauthorized" }
@@ -229,6 +271,7 @@ export async function submitOrder(tableId: string | null, items: any[], source: 
                 where: { id: existingOrder.id },
                 data: {
                     total: { increment: newItemsTotal },
+                    // dinerNames removed to avoid stale client error
                     items: {
                         create: items.map(item => ({
                             productId: item.productId,
@@ -236,12 +279,19 @@ export async function submitOrder(tableId: string | null, items: any[], source: 
                             quantity: item.quantity,
                             unitPrice: item.unitPrice,
                             totalPrice: item.totalPrice,
+                            dinerIndex: item.dinerIndex, // Fixed bug
                             extras: { create: item.extras ? item.extras.map((e: any) => ({ extraId: e.id, name: e.name, price: e.price })) : [] },
                             removedIngredients: item.removedIngredients || []
                         }))
                     }
                 }
             })
+            // RAW SQL WORKAROUND for stale client
+            try {
+                await prisma.$executeRaw`UPDATE "orders" SET "dinerNames" = ${dinerNames} WHERE "id" = ${existingOrder.id}`
+            } catch (e) {
+                console.error("Failed to update dinerNames", e)
+            }
         } else {
             // Create new order
             const total = items.reduce((acc, item) => acc + item.totalPrice, 0)
@@ -269,6 +319,7 @@ export async function submitOrder(tableId: string | null, items: any[], source: 
                     createdById: session.user.id,
                     cashShiftId: openShift?.id,
                     branchId: finalBranchId,
+                    // dinerNames removed
                     items: {
                         create: items.map(item => ({
                             productId: item.productId,
@@ -276,12 +327,20 @@ export async function submitOrder(tableId: string | null, items: any[], source: 
                             quantity: item.quantity,
                             unitPrice: item.unitPrice,
                             totalPrice: item.totalPrice,
+                            dinerIndex: item.dinerIndex, // FIX BUG
                             extras: { create: item.extras ? item.extras.map((e: any) => ({ extraId: e.id, name: e.name, price: e.price })) : [] },
                             removedIngredients: item.removedIngredients || []
                         }))
                     }
                 }
             })
+
+            // RAW SQL WORKAROUND for stale client
+            try {
+                await prisma.$executeRaw`UPDATE "orders" SET "dinerNames" = ${dinerNames} WHERE "id" = ${newOrder.id}`
+            } catch (e) {
+                console.error("Failed to set dinerNames", e)
+            }
 
             orderId = newOrder.id
 
@@ -297,7 +356,60 @@ export async function submitOrder(tableId: string | null, items: any[], source: 
         return { success: true, orderId }
     } catch (e) {
         console.error("[submitOrder] Fatal Error:", e)
-        return { success: false, error: "Failed to submit order" }
+        return { success: false, error: "Failed to submit order: " + (e instanceof Error ? e.message : String(e)) }
+    }
+}
+
+export async function splitOrder(originalOrderId: string, itemsToMoveIds: string[]) {
+    try {
+        const session = await auth()
+        if (!session?.user) return { success: false, error: "Unauthorized" }
+
+        const originalOrder = await prisma.order.findUnique({
+            where: { id: originalOrderId },
+            include: { items: true }
+        })
+        if (!originalOrder) return { success: false, error: "Order not found" }
+
+        // Calculate total of items to move
+        const itemsToMove = originalOrder.items.filter(i => itemsToMoveIds.includes(i.id))
+        if (itemsToMove.length === 0) return { success: false, error: "No items selected" }
+
+        const moveTotal = itemsToMove.reduce((sum, i) => sum + i.totalPrice, 0)
+        const newOriginalTotal = Math.max(0, originalOrder.total - moveTotal) // Ensure not negative
+
+        // Create new order
+        const newOrder = await prisma.order.create({
+            data: {
+                tableId: originalOrder.tableId,
+                tableNumber: originalOrder.tableNumber,
+                total: moveTotal,
+                status: "open",
+                source: originalOrder.source,
+                createdById: session.user.id,
+                cashShiftId: originalOrder.cashShiftId,
+                branchId: originalOrder.branchId,
+            }
+        })
+
+        // Move items to new order
+        await prisma.orderItem.updateMany({
+            where: { id: { in: itemsToMoveIds } },
+            data: { orderId: newOrder.id }
+        })
+
+        // Update totals
+        await prisma.order.update({
+            where: { id: originalOrderId },
+            data: { total: newOriginalTotal }
+        })
+
+        revalidatePath("/pos")
+        revalidatePath("/mesas")
+        return { success: true, newOrderId: newOrder.id }
+    } catch (e) {
+        console.error("[splitOrder] Error:", e)
+        return { success: false, error: "Failed to split order" }
     }
 }
 
