@@ -46,19 +46,9 @@ export function MenuView() {
   //    If we want to show *previous* items too, we should probably just keep `active` items in draft.
   //    Let's sync: `localItems` <-> `state.draftOrders`.
 
-  // If we use `draftItems` as the source of truth:
-  useEffect(() => {
-    if (menuTableId && !draftOrders[menuTableId]) {
-      // Init draft with existing order items only if we want to "edit" them?
-      // Or usually we start with what's already there?
-      // The original code: `useState(existingOrder?.items ?? [])`
-      // So yes, it loads existing items.
-      dispatch({
-        type: "SET_DRAFT_ORDER",
-        payload: { tableId: menuTableId, items: existingOrder?.items ?? [] }
-      })
-    }
-  }, [menuTableId, existingOrder, state.draftOrders, dispatch])
+  // We DO NOT init draft with existing items anymore. Existing items are read-only.
+  // We only track NEW items in draftOrders.
+  const existingItems = existingOrder?.items || []
 
   // We use a local state variable just for cleaner render logic, but sync it constantly?
   // Actually, better to just use `draftItems` directly to avoid sync issues.
@@ -68,9 +58,11 @@ export function MenuView() {
   const [diners, setDiners] = useState(
     items.length > 0
       ? Math.max(...items.map(i => i.dinerIndex), 0) + 1
-      : (existingOrder ? Math.max(...existingOrder.items.map(i => i.dinerIndex), 0) + 1 : 1)
+      : (existingItems.length > 0 ? Math.max(...existingItems.map(i => i.dinerIndex), 0) + 1 : 1)
   )
+  const [errorMsg, setErrorMsg] = useState("")
   const [activeDiner, setActiveDiner] = useState(0)
+  const [dinerNames, setDinerNames] = useState<string[]>(existingOrder?.dinerNames || [])
   const [search, setSearch] = useState("")
   const [catFilter, setCatFilter] = useState("Todos")
   const [customProduct, setCustomProduct] = useState<typeof state.products[0] | null>(null)
@@ -84,12 +76,14 @@ export function MenuView() {
   const categories = useMemo(() => ["Todos", ...new Set(state.products.filter(p => p.branchId === state.currentBranchId).map(p => p.category))], [state.products, state.currentBranchId])
   const filtered = state.products.filter(p => p.branchId === state.currentBranchId && p.available && (catFilter === "Todos" || p.category === catFilter) && p.name.toLowerCase().includes(search.toLowerCase()))
 
-  // Calculate Totals
-  const total = items.reduce((s, i) => s + i.totalPrice, 0)
+  // Calculate Totals (Draft + Existing)
+  const total = items.reduce((s, i) => s + i.totalPrice, 0) + existingItems.reduce((s, i) => s + i.totalPrice, 0)
 
   // Subtotal per diner
   const getDinerSubtotal = (index: number) => {
-    return items.filter(i => i.dinerIndex === index).reduce((acc, i) => acc + i.totalPrice, 0)
+    const draftSub = items.filter(i => i.dinerIndex === index).reduce((acc, i) => acc + i.totalPrice, 0)
+    const existingSub = existingItems.filter(i => i.dinerIndex === index).reduce((acc, i) => acc + i.totalPrice, 0)
+    return draftSub + existingSub
   }
 
   const [isPending, startTransition] = useTransition()
@@ -111,12 +105,12 @@ export function MenuView() {
   function handleSendOrder() {
     if (items.length === 0 || !table) return
 
-    // Filter out items that are already in the existing order to avoid duplicates
-    // We assume items with IDs present in existingOrder are "saved". 
-    // New items might have temporary IDs or just IDs that are NOT in existingOrder.
-    const newItems = existingOrder
-      ? items.filter(i => !existingOrder.items.some(ei => ei.id === i.id))
-      : items
+    // Only send items that are in DRAFT (items). 
+    // We do not send existingItems.
+    const newItems = items
+
+    // Safety check: ensure we aren't sending duplicates if logic failed elsewhere
+    // But since we separated them, `items` should normally purely be new.
 
     if (newItems.length === 0) {
       // If no new items, maybe just clear draft and exit? Or warn?
@@ -124,17 +118,21 @@ export function MenuView() {
       // But if they clicked "Send" and nothing is new, we should probably just go back to tables.
       dispatch({ type: "CLEAR_DRAFT_ORDER", payload: menuTableId! })
       setView("mesas")
+      setErrorMsg("") // Clear any previous error
       return
     }
 
     startTransition(async () => {
-      const res = await submitOrder(table.id, newItems, orderSource)
+      const res = await submitOrder(table.id, newItems, orderSource, undefined, dinerNames)
       if (res.success) {
         if (menuTableId) dispatch({ type: "CLEAR_DRAFT_ORDER", payload: menuTableId })
         router.refresh()
-        setView("mesas")
+        // Stay in menu view to show status update
+        // setView("mesas") 
+        setErrorMsg("")
       } else {
-        alert(res.error)
+        setErrorMsg(res.error || "Unknown error")
+        console.error("Submit error:", res.error)
       }
     })
   }
@@ -145,9 +143,10 @@ export function MenuView() {
     <div className={`flex gap-1 overflow-x-auto ${orientation === "horizontal" ? "border-b px-3 py-2" : "flex-col p-2 space-y-2"} `}>
       {Array.from({ length: diners }, (_, i) => {
         const sub = getDinerSubtotal(i)
+        const dName = dinerNames[i] || `Comensal ${i + 1}`
         return (
           <Button key={i} size="sm" variant={activeDiner === i ? "default" : "outline"} onClick={() => setActiveDiner(i)} className="shrink-0 text-xs flex flex-col items-start h-auto py-1 px-2">
-            <span>Comensal {i + 1}</span>
+            <span className="truncate max-w-[80px]">{dName}</span>
             <span className="text-[10px] opacity-80">${sub.toFixed(2)}</span>
           </Button>
         )
@@ -198,90 +197,146 @@ export function MenuView() {
       >
         <ShoppingCart className="h-5 w-5" />
         <span>${total}</span>
-        {items.length > 0 && (
+        {(items.length + existingItems.length) > 0 && (
           <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary-foreground text-xs font-bold text-primary">
-            {items.length}
+            {items.length + existingItems.length}
           </span>
         )}
       </button>
 
       {/* Order panel overlay mobile */}
-      {showOrder && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-background/80 backdrop-blur-sm lg:hidden" onClick={() => setShowOrder(false)}>
-          <div className="mt-auto flex max-h-[85vh] flex-col rounded-t-2xl border-t bg-card shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b p-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold">Pedido</span>
-                <Badge variant="secondary" className="text-xs">{items.length} items</Badge>
-              </div>
-              <Button size="sm" variant="ghost" onClick={() => setShowOrder(false)}><X className="h-4 w-4" /></Button>
-            </div>
-
-            <DinerTabs />
-
-            <div className="flex-1 overflow-y-auto p-3">
-              {items.filter(i => i.dinerIndex === activeDiner).length === 0 ? (
-                <p className="py-4 text-center text-xs text-muted-foreground">Sin items para este comensal</p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {items.filter(i => i.dinerIndex === activeDiner).map(item => (
-                    <div key={item.id} className="flex items-start gap-2 rounded-lg bg-muted/50 p-2 text-sm">
-                      <div className="flex-1">
-                        <p className="font-medium">{item.quantity}x {item.productName}</p>
-                        {item.extras.length > 0 && <p className="text-xs text-muted-foreground">+ {item.extras.map(e => e.name).join(", ")}</p>}
-                        {item.removedIngredients.length > 0 && <p className="text-xs text-destructive">Sin {item.removedIngredients.join(", ")}</p>}
-                      </div>
-                      <span className="font-medium">${item.totalPrice}</span>
-                      <button onClick={() => removeItem(item.id)}><X className="h-3 w-3 text-muted-foreground" /></button>
-                    </div>
-                  ))}
+      {
+        showOrder && (
+          <div className="fixed inset-0 z-50 flex flex-col bg-background/80 backdrop-blur-sm lg:hidden" onClick={() => setShowOrder(false)}>
+            <div className="mt-auto flex max-h-[85vh] flex-col rounded-t-2xl border-t bg-card shadow-2xl" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between border-b p-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold">Pedido</span>
+                  <Badge variant="secondary" className="text-xs">{items.length + existingItems.length} items</Badge>
                 </div>
-              )}
-            </div>
-            <div className="border-t p-3">
-              <div className="flex justify-between text-base font-bold"><span>Total</span><span>${total}</span></div>
-              <div className="mt-2 flex items-center gap-2">
-                <Store className="h-4 w-4 text-muted-foreground" />
-                <Select value={orderSource} onValueChange={setOrderSource}>
-                  <SelectTrigger className="flex-1 h-9">
-                    <SelectValue placeholder="Fuente" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sourcesOptions.map(s => (
-                      <SelectItem key={s.id} value={s.value}>{s.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Button size="sm" variant="ghost" onClick={() => setShowOrder(false)}><X className="h-4 w-4" /></Button>
               </div>
-              <Button className="mt-2 w-full gap-2" disabled={items.length === 0 || isPending} onClick={handleSendOrder}>
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                Enviar a cocina
-              </Button>
+
+              <DinerTabs />
+              <div className="px-3 pt-2">
+                <Input
+                  placeholder={`Nombre Comensal ${activeDiner + 1}`}
+                  value={dinerNames[activeDiner] || ""}
+                  onChange={e => {
+                    const val = e.target.value
+                    setDinerNames(prev => {
+                      const next = [...prev]
+                      next[activeDiner] = val
+                      return next
+                    })
+                  }}
+                  className="h-8 text-sm"
+                />
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3">
+                {(items.filter(i => i.dinerIndex === activeDiner).length === 0 && existingItems.filter(i => i.dinerIndex === activeDiner).length === 0) ? (
+                  <p className="py-4 text-center text-xs text-muted-foreground">Sin items para este comensal</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {/* Existing Items (Read-only) */}
+                    {existingItems.filter(i => i.dinerIndex === activeDiner).map(item => (
+                      <div key={item.id} className="flex items-start gap-2 rounded-lg bg-muted/30 p-2 text-sm opacity-70 border-l-2 border-primary">
+                        <div className="flex-1">
+                          <p className="font-medium">{item.quantity}x {item.productName} <span className="text-[10px] text-primary font-bold uppercase ml-1">(Enviado)</span></p>
+                          {item.extras.length > 0 && <p className="text-xs text-muted-foreground">+ {item.extras.map(e => e.name).join(", ")}</p>}
+                        </div>
+                        <span className="font-medium">${item.totalPrice}</span>
+                      </div>
+                    ))}
+
+                    {/* Draft Items (Editable) */}
+                    {items.filter(i => i.dinerIndex === activeDiner).map(item => (
+                      <div key={item.id} className="flex items-start gap-2 rounded-lg bg-muted/50 p-2 text-sm border-l-2 border-green-500">
+                        <div className="flex-1">
+                          <p className="font-medium">{item.quantity}x {item.productName} <span className="text-[10px] text-green-600 font-bold uppercase ml-1">(Nuevo)</span></p>
+                          {item.extras.length > 0 && <p className="text-xs text-muted-foreground">+ {item.extras.map(e => e.name).join(", ")}</p>}
+                          {item.removedIngredients.length > 0 && <p className="text-xs text-destructive">Sin {item.removedIngredients.join(", ")}</p>}
+                        </div>
+                        <span className="font-medium">${item.totalPrice}</span>
+                        <button onClick={() => removeItem(item.id)}><X className="h-3 w-3 text-muted-foreground" /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="border-t p-3">
+                <div className="flex justify-between text-base font-bold"><span>Total</span><span>${total}</span></div>
+                <div className="mt-2 flex items-center gap-2">
+                  <Store className="h-4 w-4 text-muted-foreground" />
+                  <Select value={orderSource} onValueChange={setOrderSource}>
+                    <SelectTrigger className="flex-1 h-9">
+                      <SelectValue placeholder="Fuente" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sourcesOptions.map(s => (
+                        <SelectItem key={s.id} value={s.value}>{s.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button className="mt-2 w-full gap-2" disabled={items.length === 0 || isPending} onClick={handleSendOrder}>
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  Enviar a cocina
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Order panel sidebar desktop */}
       <div className="hidden w-80 shrink-0 flex-col rounded-xl border bg-card lg:flex">
         <div className="border-b p-3">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold">Pedido</span>
-            <Badge variant="secondary" className="ml-auto text-xs">{items.length} items</Badge>
+            <Badge variant="secondary" className="ml-auto text-xs">{items.length + existingItems.length} items</Badge>
           </div>
 
           <DinerTabs />
+          <div className="mt-2 px-1">
+            <Input
+              placeholder={`Nombre Comensal ${activeDiner + 1}`}
+              value={dinerNames[activeDiner] || ""}
+              onChange={e => {
+                const val = e.target.value
+                setDinerNames(prev => {
+                  const next = [...prev]
+                  next[activeDiner] = val
+                  return next
+                })
+              }}
+              className="h-8 text-sm"
+            />
+          </div>
 
         </div>
         <div className="flex-1 overflow-y-auto p-3">
-          {items.filter(i => i.dinerIndex === activeDiner).length === 0 ? (
+          {(items.filter(i => i.dinerIndex === activeDiner).length === 0 && existingItems.filter(i => i.dinerIndex === activeDiner).length === 0) ? (
             <p className="py-4 text-center text-xs text-muted-foreground">Sin items para este comensal</p>
           ) : (
             <div className="flex flex-col gap-2">
-              {items.filter(i => i.dinerIndex === activeDiner).map(item => (
-                <div key={item.id} className="flex items-start gap-2 rounded-lg bg-muted/50 p-2 text-sm">
+              {/* Existing Items (Read-only) */}
+              {existingItems.filter(i => i.dinerIndex === activeDiner).map(item => (
+                <div key={item.id} className="flex items-start gap-2 rounded-lg bg-muted/30 p-2 text-sm opacity-70 border-l-2 border-primary">
                   <div className="flex-1">
-                    <p className="font-medium">{item.quantity}x {item.productName}</p>
+                    <p className="font-medium">{item.quantity}x {item.productName} <span className="text-[10px] text-primary font-bold uppercase ml-1">(Enviado)</span></p>
+                    {item.extras.length > 0 && <p className="text-xs text-muted-foreground">+ {item.extras.map(e => e.name).join(", ")}</p>}
+                  </div>
+                  <span className="font-medium">${item.totalPrice}</span>
+                </div>
+              ))}
+
+              {/* Draft Items (Editable) */}
+              {items.filter(i => i.dinerIndex === activeDiner).map(item => (
+                <div key={item.id} className="flex items-start gap-2 rounded-lg bg-muted/50 p-2 text-sm border-l-2 border-green-500">
+                  <div className="flex-1">
+                    <p className="font-medium">{item.quantity}x {item.productName} <span className="text-[10px] text-green-600 font-bold uppercase ml-1">(Nuevo)</span></p>
                     {item.extras.length > 0 && <p className="text-xs text-muted-foreground">+ {item.extras.map(e => e.name).join(", ")}</p>}
                     {item.removedIngredients.length > 0 && <p className="text-xs text-destructive">Sin {item.removedIngredients.join(", ")}</p>}
                   </div>
@@ -307,6 +362,7 @@ export function MenuView() {
               </SelectContent>
             </Select>
           </div>
+          {errorMsg && <div className="mb-2 rounded bg-destructive/15 p-2 text-xs text-destructive font-medium border border-destructive/50">{errorMsg}</div>}
           <Button className="mt-2 w-full gap-2" disabled={items.length === 0 || isPending} onClick={handleSendOrder}>
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             Enviar a cocina
@@ -315,6 +371,6 @@ export function MenuView() {
       </div>
 
       <ItemCustomizer product={customProduct} open={!!customProduct} onClose={() => setCustomProduct(null)} onAdd={addItem} dinerIndex={activeDiner} />
-    </div>
+    </div >
   )
 }

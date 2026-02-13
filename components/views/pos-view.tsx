@@ -12,9 +12,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Search, Plus, Trash2, Edit2, Loader2, X, Send, Banknote, CreditCard, Layout, Printer, UtensilsCrossed, ReceiptText, ShoppingBag, Store } from "lucide-react"
-import { submitOrder, closeOrder, openShift, closeShift, invoiceOrder, processDirectSale } from "@/lib/actions"
+import { Search, Plus, Trash2, Edit2, Loader2, X, Send, Banknote, CreditCard, Layout, Printer, UtensilsCrossed, ReceiptText, ShoppingBag, Store, Users } from "lucide-react"
+import { submitOrder, closeOrder, openShift, closeShift, invoiceOrder, processDirectSale, splitOrder } from "@/lib/actions"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
 
 function TipSection({ subtotal, tipMode, setTipMode, tipPercent, setTipPercent, tipFixed, setTipFixed, tipAmount }: {
   subtotal: number; tipMode: "percent" | "fixed"; setTipMode: (m: "percent" | "fixed") => void
@@ -181,6 +182,80 @@ function ShiftClosingDialog({ open, onClose, onConfirm, isPending, expectedCash,
   )
 }
 
+function SplitOrderDialog({ order, open, onClose }: { order: Order | null, open: boolean, onClose: () => void }) {
+  const [selectedItems, setSelectedItems] = useState<string[]>([])
+  const [isPending, startTransition] = useTransition()
+  const router = useRouter()
+
+  const diners = order ? Array.from(new Set(order.items.map(i => i.dinerIndex))).sort() : []
+
+  const handleSplit = () => {
+    if (!order || selectedItems.length === 0) return
+    startTransition(async () => {
+      const res = await splitOrder(order.id, selectedItems)
+      if (res.success) {
+        onClose()
+        setSelectedItems([])
+        router.refresh()
+      } else {
+        alert("Error al dividir orden")
+      }
+    })
+  }
+
+  if (!order) return null
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Dividir Cuenta</DialogTitle>
+          <DialogDescription>Selecciona los items o comensales para separar en una nueva cuenta.</DialogDescription>
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto py-4">
+          {diners.map(dinerIdx => {
+            const dinerItems = order.items.filter(i => i.dinerIndex === dinerIdx)
+            const allSelected = dinerItems.every(i => selectedItems.includes(i.id))
+            return (
+              <div key={dinerIdx} className="mb-4 border rounded-lg p-3">
+                <div className="flex items-center gap-2 mb-2 pb-2 border-b">
+                  <Checkbox checked={allSelected} onCheckedChange={(checked) => {
+                    const ids = dinerItems.map(i => i.id)
+                    if (checked) {
+                      setSelectedItems(prev => [...new Set([...prev, ...ids])])
+                    } else {
+                      setSelectedItems(prev => prev.filter(id => !ids.includes(id)))
+                    }
+                  }} />
+                  <span className="font-bold">Comensal {dinerIdx + 1}</span>
+                </div>
+                <div className="pl-6 flex flex-col gap-1.5">
+                  {dinerItems.map(item => (
+                    <div key={item.id} className="flex items-center gap-2 text-sm">
+                      <Checkbox checked={selectedItems.includes(item.id)} onCheckedChange={(checked) => {
+                        if (checked) setSelectedItems(prev => [...prev, item.id])
+                        else setSelectedItems(prev => prev.filter(id => id !== item.id))
+                      }} />
+                      <span>{item.quantity}x {item.productName}</span>
+                      <span className="ml-auto font-mono">${item.totalPrice}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={handleSplit} disabled={isPending || selectedItems.length === 0}>
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Separar Cuenta"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function PosView() {
   const { state, dispatch, authState } = useStore()
   const router = useRouter()
@@ -205,6 +280,7 @@ export function PosView() {
   const [selId, setSelId] = useState<string | null>(null)
   const selOrder = openOrders.find(o => o.id === selId)
   const [mTipMode, setMTipMode] = useState<"percent" | "fixed">("percent")
+  const [showSplitDialog, setShowSplitDialog] = useState(false)
 
   // Edit mode
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
@@ -407,9 +483,14 @@ export function PosView() {
             <div className="flex w-72 shrink-0 flex-col rounded-xl border bg-card lg:w-80 shadow-sm h-full">
               <div className="border-b p-4"><span className="font-semibold">Mesa {selOrder.tableNumber}</span></div>
               <div className="flex-1 overflow-y-auto p-4">
-                {selOrder.items.map(i => (
-                  <div key={i.id} className="flex justify-between border-b py-2 text-sm last:border-0">
-                    <span>{i.quantity}x {i.productName}</span><span>${i.totalPrice}</span>
+                {Array.from(new Set(selOrder.items.map(i => i.dinerIndex))).sort().map(dinerIdx => (
+                  <div key={dinerIdx} className="mb-4 last:mb-0">
+                    <div className="text-xs font-bold text-muted-foreground uppercase mb-1 bg-muted/50 p-1 rounded">Comensal {dinerIdx + 1}</div>
+                    {selOrder.items.filter(i => i.dinerIndex === dinerIdx).map(i => (
+                      <div key={i.id} className="flex justify-between border-b py-2 text-sm last:border-0 border-dashed">
+                        <span>{i.quantity}x {i.productName}</span><span>${i.totalPrice}</span>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
@@ -417,6 +498,9 @@ export function PosView() {
                 <div className="flex justify-between text-sm"><span className="text-muted-foreground">Consumo</span><span>${mSub}</span></div>
                 <TipSection subtotal={mSub} tipMode={mTipMode} setTipMode={setMTipMode} tipPercent={mTipPct} setTipPercent={setMTipPct} tipFixed={mTipFixed} setTipFixed={setMTipFixed} tipAmount={mTip} />
                 <div className="flex justify-between text-lg font-bold"><span>Total</span><span>${mTotal}</span></div>
+                <Button variant="outline" size="sm" className="w-full text-xs h-7 mb-1 gap-1" onClick={() => setShowSplitDialog(true)}>
+                  <Users className="h-3 w-3" /> Dividir Cuenta
+                </Button>
                 <div className="flex gap-2">
                   <Button className="flex-1 gap-1" onClick={() => handleChargeMesa("cash")} disabled={isPending}>{isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}Efectivo</Button>
                   <Button className="flex-1 gap-1" variant="secondary" onClick={() => handleChargeMesa("card")} disabled={isPending}>{isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}Tarjeta</Button>
@@ -687,6 +771,12 @@ export function PosView() {
         total={paymentTotal}
         onConfirm={paymentCallback || (() => { })}
         isPending={isPending}
+      />
+
+      <SplitOrderDialog
+        order={selOrder || null}
+        open={showSplitDialog}
+        onClose={() => setShowSplitDialog(false)}
       />
 
       <EditOrderDialog

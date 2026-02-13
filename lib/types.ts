@@ -42,6 +42,7 @@ export interface OrderItem {
   extras: ProductExtra[]; removedIngredients: string[]
   notes: string; dinerIndex: number
   status: "pending" | "preparing" | "ready" | "delivered"
+  product?: Product
 }
 
 export interface Order {
@@ -54,6 +55,7 @@ export interface Order {
   invoiced: boolean
   createdByName?: string | null
   closedByName?: string | null
+  dinerNames?: string[]
 }
 
 export type SupplyCategory = "Carnes" | "Verduras" | "Lacteos" | "Granos" | "Bebidas" | "Condimentos" | "Otros"
