@@ -31,6 +31,7 @@ model User {
   supplyMovements SupplyMovement[]
   ordersCreated   Order[]          @relation("OrderCreatedBy")
   ordersClosed    Order[]          @relation("OrderClosedBy")
+  categoryHistory CategoryHistory[]
 
   @@map("users")
 }
@@ -300,4 +301,19 @@ model ConfigListItem {
   list      ConfigList @relation(fields: [listId], references: [id], onDelete: Cascade)
 
   @@map("config_list_items")
+}
+
+
+
+model CategoryHistory {
+  id        String   @id @default(cuid())
+  listName  String   // "product_categories" or "supply_categories"
+  action    String   // "CREATE", "UPDATE", "DELETE"
+  itemName  String   // The value/label of the item
+  details   String?  // Description of change
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@map("category_history")
 }

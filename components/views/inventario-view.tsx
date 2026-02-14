@@ -1,6 +1,6 @@
 import { useState, useTransition } from "react"
 import { useStore } from "@/lib/spa-store"
-import type { Product, Supply, SupplyMovement, SupplyCategory } from "@/lib/types"
+import type { Product, Supply, SupplyMovement, SupplyCategory, CategoryHistory } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -11,18 +11,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Plus, Edit2, Trash2, Package, ArrowDownCircle, ArrowUpCircle, AlertTriangle, Search, Loader2, ListTodo, Check, X, Image as ImageIcon, Upload } from "lucide-react"
-import { createProduct, updateProduct, deleteProduct, toggleProductAvailability, createSupply, updateSupply, deleteSupply, addSupplyMovement, addConfigListItem, updateConfigListItem, deleteConfigListItem, ensureDefaultLists } from "@/lib/actions"
+import { Plus, Edit2, Trash2, Package, ArrowDownCircle, ArrowUpCircle, AlertTriangle, Search, Loader2, ListTodo, Check, X, Image as ImageIcon, Upload, Clock } from "lucide-react"
+import { createProduct, updateProduct, deleteProduct, toggleProductAvailability, createSupply, updateSupply, deleteSupply, addSupplyMovement, addConfigListItem, updateConfigListItem, deleteConfigListItem, ensureDefaultLists, getCategoryHistory } from "@/lib/actions"
 import { compressImage } from "@/lib/image-utils"
 
 // ---- Product Catalog ----
 function CatalogoTab() {
   const { state } = useStore()
   const [search, setSearch] = useState("")
+  const [catFilter, setCatFilter] = useState("Todos")
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
+
+  const productCategories = state.configLists.find(l => l.name === "product_categories")?.items.filter(i => i.active) || []
+  const categoriesList = productCategories.length > 0 ? Array.from(new Set(productCategories.map(c => c.label))) : ["General"]
+
   const [formData, setFormData] = useState({
-    name: "", category: "General", price: "0", description: "", image: "",
+    name: "", category: categoriesList[0], price: "0", description: "", image: "",
     available: true, requiresKitchen: true
   })
   const [extras, setExtras] = useState<{ name: string; price: number }[]>([])
@@ -30,11 +35,15 @@ function CatalogoTab() {
 
   const [isPending, startTransition] = useTransition()
 
-  const filtered = state.products.filter(p => p.branchId === state.currentBranchId && p.name.toLowerCase().includes(search.toLowerCase()))
+  const filtered = state.products.filter(p =>
+    p.branchId === state.currentBranchId &&
+    (catFilter === "Todos" || p.category === catFilter) &&
+    p.name.toLowerCase().includes(search.toLowerCase())
+  )
 
   function openNew() {
     setEditing(null)
-    setFormData({ name: "", category: "Platos fuertes", price: "", description: "", image: "", available: true, requiresKitchen: true })
+    setFormData({ name: "", category: categoriesList[0], price: "", description: "", image: "", available: true, requiresKitchen: true })
     setExtras([]); setIngredients([])
     setShowForm(true)
   }
@@ -82,6 +91,7 @@ function CatalogoTab() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
         <div className="relative flex-1"><Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8" placeholder="Buscar producto..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <Select value={catFilter} onValueChange={setCatFilter}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Todos">Todos</SelectItem>{categoriesList.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
         <Button size="sm" className="gap-1" onClick={openNew}><Plus className="h-4 w-4" />Producto</Button>
       </div>
       <div className="overflow-x-auto rounded-xl border">
@@ -120,7 +130,7 @@ function CatalogoTab() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1"><Label>Precio</Label><Input type="number" value={formData.price} onChange={e => setFormData(f => ({ ...f, price: e.target.value }))} /></div>
                 <div className="space-y-1"><Label>Categoria</Label>
-                  <Select value={formData.category} onValueChange={v => setFormData(f => ({ ...f, category: v }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["Entradas", "Platos fuertes", "Bebidas", "Postres"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+                  <Select value={formData.category} onValueChange={v => setFormData(f => ({ ...f, category: v }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{categoriesList.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
                 </div>
               </div>
               <div className="space-y-1"><Label>Descripcion</Label><Input value={formData.description} onChange={e => setFormData(f => ({ ...f, description: e.target.value }))} /></div>
@@ -225,15 +235,16 @@ function CatalogoTab() {
 }
 
 // ---- Materia Prima ----
-const supplyCategories: SupplyCategory[] = ["Carnes", "Verduras", "Lacteos", "Granos", "Bebidas", "Condimentos", "Otros"]
 
 function MateriaPrimaTab() {
   const { state } = useStore()
+  const supplyCategoriesList = state.configLists.find(l => l.name === "supply_categories")?.items.filter(i => i.active).map(i => i.label) || ["General"]
+
   const [search, setSearch] = useState("")
   const [catFilter, setCatFilter] = useState("Todos")
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Supply | null>(null)
-  const [form, setForm] = useState({ name: "", category: "Carnes" as SupplyCategory, unit: "kg", stock: "", minStock: "", costPerUnit: "" })
+  const [form, setForm] = useState({ name: "", category: supplyCategoriesList[0] as SupplyCategory, unit: "kg", stock: "", minStock: "", costPerUnit: "" })
   const [showMove, setShowMove] = useState(false)
   const [moveSupply, setMoveSupply] = useState<Supply | null>(null)
   const [moveType, setMoveType] = useState<"entry" | "exit" | "waste">("entry")
@@ -246,7 +257,7 @@ function MateriaPrimaTab() {
   const lowStock = state.supplies.filter(s => s.branchId === state.currentBranchId && s.stock <= s.minStock)
   const totalValue = filtered.reduce((s, su) => s + su.stock * su.costPerUnit, 0)
 
-  function openNew() { setEditing(null); setForm({ name: "", category: "Carnes", unit: "kg", stock: "", minStock: "", costPerUnit: "" }); setShowForm(true) }
+  function openNew() { setEditing(null); setForm({ name: "", category: supplyCategoriesList[0] as SupplyCategory, unit: "kg", stock: "", minStock: "", costPerUnit: "" }); setShowForm(true) }
   function openEdit(s: Supply) { setEditing(s); setForm({ name: s.name, category: s.category as SupplyCategory, unit: s.unit, stock: String(s.stock), minStock: String(s.minStock), costPerUnit: String(s.costPerUnit) }); setShowForm(true) }
 
   function save() {
@@ -291,7 +302,7 @@ function MateriaPrimaTab() {
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1"><Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8" placeholder="Buscar insumo..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <Select value={catFilter} onValueChange={setCatFilter}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Todos">Todos</SelectItem>{supplyCategories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+        <Select value={catFilter} onValueChange={setCatFilter}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Todos">Todos</SelectItem>{supplyCategoriesList.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
         <Button size="sm" className="gap-1" onClick={openNew}><Plus className="h-4 w-4" />Insumo</Button>
       </div>
 
@@ -342,7 +353,7 @@ function MateriaPrimaTab() {
           <div className="flex flex-col gap-3">
             <div><Label>Nombre</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Categoria</Label><Select value={form.category} onValueChange={v => setForm(f => ({ ...f, category: v as SupplyCategory }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{supplyCategories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select></div>
+              <div><Label>Categoria</Label><Select value={form.category} onValueChange={v => setForm(f => ({ ...f, category: v as SupplyCategory }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{supplyCategoriesList.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select></div>
               <div><Label>Unidad</Label><Input value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} /></div>
             </div>
             <div className="grid grid-cols-3 gap-3">
@@ -377,10 +388,16 @@ function ListasTab() {
   const [newItem, setNewItem] = useState<{ listName: string; value: string; label: string } | null>(null)
   const [editingItem, setEditingItem] = useState<{ id: string; label: string; active: boolean } | null>(null)
 
+  // History State
+  const [viewingHistory, setViewingHistory] = useState<string | null>(null)
+  const [historyData, setHistoryData] = useState<CategoryHistory[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+
   const listLabels: Record<string, string> = {
     order_sources: "Fuentes de Pedido",
     product_categories: "Categorías de Productos",
-    table_zones: "Zonas de Mesas"
+    table_zones: "Zonas de Mesas",
+    supply_categories: "Categorías de Insumos"
   }
 
   function handleEnsureDefaults() {
@@ -412,6 +429,20 @@ function ListasTab() {
     })
   }
 
+  function handleViewHistory(listName: string) {
+    setViewingHistory(listName)
+    setHistoryLoading(true)
+    startTransition(async () => {
+      const res = await getCategoryHistory(listName)
+      if (res.success && res.data) {
+        setHistoryData(res.data)
+      } else {
+        setHistoryData([])
+      }
+      setHistoryLoading(false)
+    })
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {state.configLists.length === 0 ? (
@@ -430,9 +461,16 @@ function ListasTab() {
           <Card key={list.id}>
             <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <CardTitle className="text-base">{listLabels[list.name] || list.name}</CardTitle>
-              <Button size="sm" variant="outline" onClick={() => setNewItem({ listName: list.name, value: "", label: "" })}>
-                <Plus className="h-3 w-3 mr-1" />Agregar
-              </Button>
+              <div className="flex gap-2">
+                {(list.name === "product_categories" || list.name === "supply_categories") && (
+                  <Button size="sm" variant="outline" onClick={() => handleViewHistory(list.name)} disabled={isPending}>
+                    <Clock className="h-3 w-3 mr-1" />Historial
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" onClick={() => setNewItem({ listName: list.name, value: "", label: "" })}>
+                  <Plus className="h-3 w-3 mr-1" />Agregar
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="flex flex-col gap-2">
@@ -489,6 +527,7 @@ function ListasTab() {
           order_sources: { value: "ej: uber_eats", label: "ej: Uber Eats" },
           product_categories: { value: "ej: sopas", label: "ej: Sopas" },
           table_zones: { value: "ej: jardin", label: "ej: Jardín" },
+          supply_categories: { value: "ej: carnes", label: "ej: Carnes" }
         }
         const ph = placeholders[newItem?.listName || ""] || { value: "ej: valor", label: "ej: Etiqueta" }
         return (
@@ -504,6 +543,36 @@ function ListasTab() {
           </Dialog>
         )
       })()}
+
+      {/* History Dialog */}
+      <Dialog open={!!viewingHistory} onOpenChange={open => !open && setViewingHistory(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>Historial de Cambios - {listLabels[viewingHistory || ""]}</DialogTitle></DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto">
+            {historyLoading ? (
+              <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
+            ) : historyData.length === 0 ? (
+              <p className="text-center text-muted-foreground p-8">No hay historial registrado</p>
+            ) : (
+              <div className="space-y-4">
+                {historyData.map(h => (
+                  <div key={h.id} className="flex flex-col gap-1 border-b pb-3 last:border-0">
+                    <div className="flex justify-between items-start">
+                      <span className="font-medium text-sm">{h.itemName}</span>
+                      <Badge variant={h.action === "CREATE" ? "default" : h.action === "DELETE" ? "destructive" : "secondary"}>{h.action === "CREATE" ? "Creado" : h.action === "DELETE" ? "Eliminado" : "Editado"}</Badge>
+                    </div>
+                    <p className="text-sm text-balance">{h.details}</p>
+                    <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                      <span>{h.userName || "Usuario sistema"}</span>
+                      <span>{new Date(h.createdAt).toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

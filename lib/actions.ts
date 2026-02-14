@@ -658,7 +658,8 @@ export async function openShift(startAmount: number, branchId?: string) {
         revalidatePath("/pos")
         return { success: true }
     } catch (error) {
-        return { success: false, error: "Failed to open shift" }
+        console.error("[openShift] Error:", error);
+        return { success: false, error: "Failed to open shift: " + (error instanceof Error ? error.message : String(error)) }
     }
 }
 
@@ -1128,6 +1129,19 @@ export async function addConfigListItem(listName: string, value: string, label: 
             }
         })
 
+        // Log history if it's a category list
+        if (listName === "product_categories" || listName === "supply_categories") {
+            await prisma.categoryHistory.create({
+                data: {
+                    listName,
+                    action: "CREATE",
+                    itemName: label,
+                    userId: session.user.id,
+                    details: `Created category '${label}' (value: ${value})`
+                }
+            })
+        }
+
         revalidatePath("/")
         return { success: true }
     } catch (e) {
@@ -1143,10 +1157,39 @@ export async function updateConfigListItem(itemId: string, label: string, active
     }
 
     try {
+        // Fetch item first to get list info for logging
+        const item = await prisma.configListItem.findUnique({
+            where: { id: itemId },
+            include: { list: true }
+        })
+
+        if (!item) return { success: false, error: "Item not found" }
+
         await prisma.configListItem.update({
             where: { id: itemId },
             data: { label, active }
         })
+
+        // Log history if it's a category list
+        const listName = item.list.name
+        if (listName === "product_categories" || listName === "supply_categories") {
+            const changes = []
+            if (item.label !== label) changes.push(`Renamed from '${item.label}' to '${label}'`)
+            if (item.active !== active) changes.push(`Status changed to ${active ? "active" : "inactive"}`)
+
+            if (changes.length > 0) {
+                await prisma.categoryHistory.create({
+                    data: {
+                        listName,
+                        action: "UPDATE",
+                        itemName: label,
+                        userId: session.user.id,
+                        details: changes.join(", ")
+                    }
+                })
+            }
+        }
+
         revalidatePath("/")
         return { success: true }
     } catch (e) {
@@ -1162,12 +1205,62 @@ export async function deleteConfigListItem(itemId: string) {
     }
 
     try {
+        // Fetch item first to get list info for logging
+        const item = await prisma.configListItem.findUnique({
+            where: { id: itemId },
+            include: { list: true }
+        })
+
+        if (!item) return { success: false, error: "Item not found" }
+
         await prisma.configListItem.delete({ where: { id: itemId } })
+
+        // Log history
+        const listName = item.list.name
+        if (listName === "product_categories" || listName === "supply_categories") {
+            await prisma.categoryHistory.create({
+                data: {
+                    listName,
+                    action: "DELETE",
+                    itemName: item.label,
+                    userId: session.user.id,
+                    details: `Deleted category '${item.label}' (value: ${item.value})`
+                }
+            })
+        }
+
         revalidatePath("/")
         return { success: true }
     } catch (e) {
         console.error("[deleteConfigListItem] Error:", e)
         return { success: false, error: "Failed to delete item" }
+    }
+}
+
+export async function getCategoryHistory(listName: string) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "admin") {
+        return { success: false, error: "Unauthorized" }
+    }
+
+    try {
+        const history = await prisma.categoryHistory.findMany({
+            where: { listName },
+            orderBy: { createdAt: 'desc' },
+            include: { user: { select: { name: true } } }
+        })
+
+        return {
+            success: true,
+            data: history.map(h => ({
+                ...h,
+                userName: h.user.name || "Unknown",
+                createdAt: h.createdAt.toISOString()
+            }))
+        }
+    } catch (e) {
+        console.error("[getCategoryHistory] Error:", e)
+        return { success: false, error: "Failed to fetch history" }
     }
 }
 
@@ -1570,5 +1663,117 @@ export async function fetchReportData() {
     } catch (e) {
         console.error("[fetchReportData] Error:", e)
         return { success: false, error: "Failed to fetch report data" }
+    }
+}
+
+export async function getHistoricalReports(from: Date, to: Date) {
+    try {
+        // Ensure "to" includes the full end day
+        const endDate = new Date(to)
+        endDate.setHours(23, 59, 59, 999)
+
+        const [orders, supplyMovements, cashShifts, supplies, employees] = await Promise.all([
+            prisma.order.findMany({
+                where: {
+                    status: 'closed',
+                    createdAt: {
+                        gte: from,
+                        lte: endDate
+                    }
+                },
+                include: { items: { include: { extras: true, product: true } } },
+                orderBy: { createdAt: 'desc' }
+            }),
+            prisma.supplyMovement.findMany({
+                where: {
+                    createdAt: {
+                        gte: from,
+                        lte: endDate
+                    }
+                },
+                orderBy: { createdAt: 'desc' }
+            }),
+            prisma.cashShift.findMany({
+                where: {
+                    openedAt: {
+                        gte: from,
+                        lte: endDate
+                    }
+                },
+                include: { user: true },
+                orderBy: { openedAt: 'desc' }
+            }),
+            prisma.supply.findMany(),
+            prisma.user.findMany()
+        ])
+
+        const serializeDate = (d: Date | null) => d ? d.toISOString() : null
+
+        const serializedOrders = orders.map((o: any) => {
+            const createdByEmployee = employees.find((e: any) => e.id === o.createdById)
+            const closedByEmployee = employees.find((e: any) => e.id === o.closedById)
+            return {
+                id: o.id,
+                tableId: o.tableId,
+                tableNumber: o.tableNumber,
+                status: o.status,
+                total: o.total,
+                paymentMethod: o.paymentMethod,
+                source: o.source,
+                createdAt: serializeDate(o.createdAt),
+                closedAt: serializeDate(o.closedAt),
+                transactionFolio: o.transactionFolio,
+                invoiced: o.invoiced,
+                tip: o.tip,
+                branchId: o.branchId || null,
+                createdByName: createdByEmployee?.name || null,
+                closedByName: closedByEmployee?.name || null,
+                dinerNames: o.dinerNames || [],
+                items: o.items.map((i: any) => ({
+                    ...i,
+                    removedIngredients: i.removedIngredients as unknown as string[],
+                    product: i.product ? {
+                        ...i.product,
+                        createdAt: serializeDate(i.product.createdAt),
+                        updatedAt: serializeDate(i.product.updatedAt),
+                        unit: i.product.unit,
+                        branchId: i.product.branchId || null,
+                        extras: i.product.extras || [],
+                        ingredients: i.product.ingredients || []
+                    } : undefined,
+                })),
+            }
+        })
+
+        const serializedMovements = supplyMovements.map((m: any) => {
+            const s = supplies.find((sup: any) => sup.id === m.supplyId)
+            return {
+                ...m,
+                createdAt: serializeDate(m.createdAt),
+                supplyName: s?.name || "Desconocido",
+                branchId: s?.branchId || null
+            }
+        })
+
+        const serializedShifts = cashShifts.map((s: any) => ({
+            ...s,
+            openedAt: s.openedAt.toISOString(),
+            closedAt: s.closedAt?.toISOString() || null,
+            status: s.status as "open" | "closed",
+            userName: s.user?.name || "Desconocido",
+            branchId: s.branchId || null
+        }))
+
+        return {
+            success: true,
+            data: {
+                orders: serializedOrders,
+                supplyMovements: serializedMovements,
+                cashShifts: serializedShifts
+            }
+        }
+    } catch (e) {
+        console.error("[getHistoricalReports] Error:", e)
+        return { success: false, error: "Failed to fetch historical data" }
     }
 }

@@ -640,6 +640,34 @@ export function PosView() {
                     </div>
 
                     <div className="flex gap-2 pt-1">
+                      <Button variant="outline" size="sm" className="flex-1 h-8 text-[11px] font-bold uppercase gap-1.5" onClick={async () => {
+                        try {
+                          // 1. Get ticket data from cloud
+                          const response = await fetch(`/api/orders/${o.id}/ticket`);
+                          const data = await response.json();
+                          if (data.error) throw new Error(data.error);
+
+                          // 2. Send to local service
+                          // Note: Using a fixed printer name 'EPSON' for now, or could be configurable.
+                          // Per prompt guide: "nombreImpresoraLocal"
+                          // Direct USB: /dev/usb/lp0
+                          // CUPS Printer: POS58
+                          const printerName = "POS58";
+                          const localServiceUrl = new URL('http://localhost:9100/print');
+                          localServiceUrl.searchParams.append('p', printerName);
+                          localServiceUrl.searchParams.append('d', data.raw_data_base64);
+
+                          console.log("Sending print request to:", localServiceUrl.toString());
+                          const res = await fetch(localServiceUrl);
+                          if (!res.ok) throw new Error(`Local Service Error: ${res.status} ${res.statusText}`);
+                          alert("Impresión enviada correctamente");
+                        } catch (error) {
+                          console.error("Error imprimiendo:", error);
+                          alert(`Error: ${error instanceof Error ? error.message : String(error)}`);
+                        }
+                      }}>
+                        <Printer className="h-3.5 w-3.5" /> POS
+                      </Button>
                       <Button variant="outline" size="sm" className="flex-1 h-8 text-[11px] font-bold uppercase gap-1.5" onClick={() => {
                         const win = window.open('', '_blank');
                         if (win) {

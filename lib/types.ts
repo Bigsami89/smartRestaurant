@@ -160,5 +160,11 @@ export type RestaurantAction =
   | { type: "SET_DRAFT_ORDER"; payload: { tableId: string; items: OrderItem[] } }
   | { type: "CLEAR_DRAFT_ORDER"; payload: string }
 
+export interface CategoryHistory {
+  id: string; listName: string; action: string; itemName: string
+  details?: string | null; userId: string; userName?: string
+  createdAt: string
+}
+
 export interface AuthState { user: User | null; isAuthenticated: boolean }
 export type AuthAction = { type: "LOGIN"; payload: User } | { type: "LOGOUT" }
