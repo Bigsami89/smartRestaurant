@@ -11,6 +11,7 @@ import { ReservationsView } from "@/components/views/reservations-view"
 import { LayoutDashboard, Grid3X3, CreditCard, ChefHat, Package, BarChart3, Users, LogOut, Menu, X, UtensilsCrossed, Building2, Armchair, Calendar, Settings } from "lucide-react"
 import { useState } from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 const navItems: { id: ViewId; label: string; icon: React.ElementType }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -130,7 +131,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="border-t border-sidebar-border p-3">
-          <div className="mb-2 px-3 text-xs text-sidebar-foreground/50">{authState.user?.name}</div>
+          <div className="mb-2 px-3 flex items-center justify-between">
+            <span className="text-xs text-sidebar-foreground/50">{authState.user?.name}</span>
+            <ThemeToggle variant="sidebar" />
+          </div>
           <button onClick={() => signOut()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50">
             <LogOut className="h-4 w-4" />Cerrar sesión
           </button>
@@ -190,6 +194,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="mt-auto border-t border-sidebar-border p-3">
+          <div className="mb-2 px-3 flex items-center justify-between">
+            <span className="text-xs text-sidebar-foreground/50">{authState.user?.name}</span>
+            <ThemeToggle variant="sidebar" />
+          </div>
           <button onClick={() => signOut()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50">
             <LogOut className="h-4 w-4" />Cerrar sesión
           </button>
@@ -201,11 +209,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-card px-4">
           <button className="md:hidden" onClick={() => setOpen(true)}><Menu className="h-5 w-5" /></button>
           <h1 className="text-lg font-semibold text-card-foreground">{currentLabel}</h1>
-          {currentBranch && (
-            <span className="ml-auto text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
-              {currentBranch.name}
-            </span>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {currentBranch && (
+              <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
+                {currentBranch.name}
+              </span>
+            )}
+            <ThemeToggle />
+          </div>
         </header>
         <main className="flex-1 overflow-y-auto p-4">{children}</main>
       </div>

@@ -8,7 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Loader2, Save, Shield, LayoutDashboard, Grid3X3, CreditCard, ChefHat, Package, BarChart3, Users, UtensilsCrossed, Armchair, Calendar, Settings } from "lucide-react"
+import { Loader2, Save, Shield, LayoutDashboard, Grid3X3, CreditCard, ChefHat, Package, BarChart3, Users, UtensilsCrossed, Armchair, Calendar, Settings, Palette, Sun, Moon, Monitor, Check } from "lucide-react"
 import type { ViewId, UserRole } from "@/lib/types"
 import { useTransition, useState, useEffect, useRef } from "react"
 import { updateRolePermissions, updateBusinessConfig } from "@/lib/actions"
@@ -16,6 +16,8 @@ import { useRouter } from "next/navigation"
 import Image from "next/image"
 import { Input } from "@/components/ui/input"
 import { ImagePlus, Trash2 } from "lucide-react"
+import { useTheme } from "next-themes"
+import { COLOR_PALETTES, getStoredPalette, savePalette, applyPalette } from "@/lib/theme-config"
 
 const roles: { id: UserRole; label: string }[] = [
     { id: "admin", label: "Administrador" },
@@ -43,6 +45,13 @@ export function ConfiguracionView() {
     const [isPending, startTransition] = useTransition()
     const [selectedRole, setSelectedRole] = useState<UserRole>("admin")
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const { resolvedTheme, setTheme, theme } = useTheme()
+    const [selectedPalette, setSelectedPalette] = useState(getStoredPalette())
+    const [themeMounted, setThemeMounted] = useState(false)
+
+    useEffect(() => {
+        setThemeMounted(true)
+    }, [])
 
     // Permissions Local State
     const [permissions, setPermissions] = useState<Record<UserRole, ViewId[]>>({ ...defaultRolePermissions })
@@ -172,6 +181,10 @@ export function ConfiguracionView() {
             <Tabs defaultValue="general" className="flex-1 flex flex-col">
                 <TabsList>
                     <TabsTrigger value="general">General</TabsTrigger>
+                    <TabsTrigger value="apariencia" className="flex items-center gap-1.5">
+                        <Palette className="h-3.5 w-3.5" />
+                        Apariencia
+                    </TabsTrigger>
                     <TabsTrigger value="roles">Permisos por Rol</TabsTrigger>
                 </TabsList>
 
@@ -298,6 +311,123 @@ export function ConfiguracionView() {
                                 </Button>
                             </div>
                         </Card>
+                    </div>
+                </TabsContent>
+
+                <TabsContent value="apariencia" className="flex-1 mt-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Mode Toggle */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Modo de Apariencia</CardTitle>
+                                <CardDescription>Elige entre modo claro, oscuro o automático del sistema.</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                {themeMounted && (
+                                    <div className="flex gap-3">
+                                        {[
+                                            { value: "light", label: "Claro", icon: Sun },
+                                            { value: "dark", label: "Oscuro", icon: Moon },
+                                            { value: "system", label: "Sistema", icon: Monitor },
+                                        ].map(opt => {
+                                            const Icon = opt.icon
+                                            const isActive = theme === opt.value
+                                            return (
+                                                <button
+                                                    key={opt.value}
+                                                    onClick={() => {
+                                                        setTheme(opt.value)
+                                                        // Re-apply palette after mode switch
+                                                        setTimeout(() => applyPalette(selectedPalette), 100)
+                                                    }}
+                                                    className={`flex flex-1 flex-col items-center gap-2 rounded-lg border-2 p-4 transition-all ${isActive
+                                                            ? "border-primary bg-primary/5 shadow-sm"
+                                                            : "border-border hover:border-primary/40 hover:bg-muted/50"
+                                                        }`}
+                                                >
+                                                    <Icon className={`h-6 w-6 ${isActive ? "text-primary" : "text-muted-foreground"}`} />
+                                                    <span className={`text-sm font-medium ${isActive ? "text-primary" : "text-foreground"}`}>
+                                                        {opt.label}
+                                                    </span>
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+
+                        {/* Palette Info */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Paleta Actual</CardTitle>
+                                <CardDescription>
+                                    {COLOR_PALETTES.find(p => p.name === selectedPalette)?.description || "Selecciona una paleta de colores."}
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="flex items-center gap-4">
+                                    <div className="flex gap-2">
+                                        {COLOR_PALETTES.find(p => p.name === selectedPalette)?.preview.map((color, i) => (
+                                            <div
+                                                key={i}
+                                                className="h-12 w-12 rounded-lg shadow-inner border"
+                                                style={{ backgroundColor: color }}
+                                            />
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <p className="font-semibold text-lg">
+                                            {COLOR_PALETTES.find(p => p.name === selectedPalette)?.label}
+                                        </p>
+                                        <p className="text-sm text-muted-foreground">Tema activo</p>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Palette Grid */}
+                    <div className="mt-6">
+                        <h3 className="text-base font-semibold mb-4">Paletas de Colores</h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {COLOR_PALETTES.map(palette => {
+                                const isActive = selectedPalette === palette.name
+                                return (
+                                    <button
+                                        key={palette.name}
+                                        onClick={() => {
+                                            setSelectedPalette(palette.name)
+                                            savePalette(palette.name)
+                                            applyPalette(palette.name)
+                                        }}
+                                        className={`relative flex flex-col rounded-xl border-2 p-4 text-left transition-all hover:shadow-md ${isActive
+                                                ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/20"
+                                                : "border-border hover:border-primary/40"
+                                            }`}
+                                    >
+                                        {isActive && (
+                                            <div className="absolute top-3 right-3 flex h-5 w-5 items-center justify-center rounded-full bg-primary">
+                                                <Check className="h-3 w-3 text-primary-foreground" />
+                                            </div>
+                                        )}
+                                        <div className="flex gap-2 mb-3">
+                                            {palette.preview.map((color, i) => (
+                                                <div
+                                                    key={i}
+                                                    className="h-8 w-8 rounded-md shadow-sm border border-black/10"
+                                                    style={{ backgroundColor: color }}
+                                                />
+                                            ))}
+                                        </div>
+                                        <span className="font-medium text-sm">{palette.label}</span>
+                                        <span className="text-xs text-muted-foreground mt-0.5">
+                                            {palette.description}
+                                        </span>
+                                    </button>
+                                )
+                            })}
+                        </div>
                     </div>
                 </TabsContent>
 
