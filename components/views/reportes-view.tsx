@@ -1,19 +1,77 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useCallback, useRef } from "react"
 import { useStore } from "@/lib/spa-store"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { DollarSign, ShoppingBag, TrendingUp, CreditCard, ArrowDownRight, ArrowUpRight, Calendar, Filter, Clock, Package, Download } from "lucide-react"
+import { DollarSign, ShoppingBag, TrendingUp, CreditCard, ArrowDownRight, ArrowUpRight, Calendar, Clock, Package, Download, Globe, RefreshCw } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import * as XLSX from "xlsx"
+import { fetchReportData } from "@/lib/actions"
+
+// --- Date formatting helpers ---
+function formatFullDate(date: Date): string {
+  const day = date.getDate().toString().padStart(2, "0")
+  const month = (date.getMonth() + 1).toString().padStart(2, "0")
+  const year = date.getFullYear()
+  const hours = date.getHours().toString().padStart(2, "0")
+  const minutes = date.getMinutes().toString().padStart(2, "0")
+  return `${day}/${month}/${year} ${hours}:${minutes}`
+}
+
+function formatDateOnly(date: Date): string {
+  const day = date.getDate().toString().padStart(2, "0")
+  const month = (date.getMonth() + 1).toString().padStart(2, "0")
+  const year = date.getFullYear()
+  return `${day}/${month}/${year}`
+}
+
+// --- Platform label & color config ---
+const platformConfig: Record<string, { label: string; color: string; bg: string }> = {
+  direct: { label: "Directo", color: "text-emerald-500", bg: "bg-emerald-500" },
+  rappi: { label: "Rappi", color: "text-orange-500", bg: "bg-orange-500" },
+  uber_eats: { label: "Uber Eats", color: "text-green-600", bg: "bg-green-600" },
+  didi: { label: "Didi Food", color: "text-amber-500", bg: "bg-amber-500" },
+}
+
+function getPlatformInfo(source: string | null) {
+  return platformConfig[source || "direct"] || { label: source || "Otro", color: "text-purple-500", bg: "bg-purple-500" }
+}
 
 export function ReportesView() {
-  const { state } = useStore()
+  const { state, dispatch } = useStore()
   const [period, setPeriod] = useState<"day" | "week" | "month">("day")
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // --- Auto-refresh polling ---
+  const refreshData = useCallback(async () => {
+    setIsRefreshing(true)
+    try {
+      const result = await fetchReportData()
+      if (result.success && result.data) {
+        dispatch({ type: "SET_ORDERS", payload: result.data.orders as any })
+        dispatch({ type: "SET_SUPPLY_MOVEMENTS", payload: result.data.supplyMovements as any })
+        dispatch({ type: "SET_CASH_SHIFTS", payload: result.data.cashShifts as any })
+        setLastUpdated(new Date())
+      }
+    } catch (err) {
+      console.error("[ReportesView] Refresh error:", err)
+    } finally {
+      setIsRefreshing(false)
+    }
+  }, [dispatch])
+
+  useEffect(() => {
+    intervalRef.current = setInterval(refreshData, 15000) // 15 seconds
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [refreshData])
 
   // Filter logic (includes branch filtering)
   const filteredData = useMemo(() => {
@@ -82,6 +140,29 @@ export function ReportesView() {
   const cash = closed.filter(o => o.paymentMethod === "cash").reduce((s, o) => s + o.total, 0)
   const card = closed.filter(o => o.paymentMethod === "card").reduce((s, o) => s + o.total, 0)
 
+  // --- Platform sales breakdown ---
+  const platformSales = useMemo(() => {
+    const breakdown: Record<string, number> = {}
+    closed.forEach(o => {
+      const src = o.source || "direct"
+      breakdown[src] = (breakdown[src] || 0) + o.total
+    })
+    // Sort by amount descending
+    return Object.entries(breakdown)
+      .map(([source, amount]) => ({ source, amount, ...getPlatformInfo(source) }))
+      .sort((a, b) => b.amount - a.amount)
+  }, [closed])
+
+  const onlineSalesTotal = useMemo(() => {
+    return platformSales
+      .filter(p => p.source !== "direct")
+      .reduce((sum, p) => sum + p.amount, 0)
+  }, [platformSales])
+
+  const onlineOrderCount = useMemo(() => {
+    return closed.filter(o => o.source && o.source !== "direct").length
+  }, [closed])
+
   // Movements for history table
   const allMovements = useMemo(() => {
     const saleLogs = closed.map(o => ({
@@ -90,7 +171,8 @@ export function ReportesView() {
       type: "Ingreso",
       category: o.paymentMethod === "cash" ? "Venta Efectivo" : "Venta Tarjeta",
       amount: o.total,
-      description: o.tableNumber ? `Mesa ${o.tableNumber}` : "Venta Directa"
+      description: o.tableNumber ? `Mesa ${o.tableNumber}` : "Venta Directa",
+      source: o.source || "direct"
     }))
 
     const expenseLogs = movements
@@ -104,7 +186,8 @@ export function ReportesView() {
           type: "Egreso",
           category: m.type === "waste" ? "Merma" : "Insumo",
           amount: cost,
-          description: `${m.supplyName} (${m.quantity} ${supply?.unit || ""})`
+          description: `${m.supplyName} (${m.quantity} ${supply?.unit || ""})`,
+          source: ""
         }
       })
 
@@ -114,9 +197,10 @@ export function ReportesView() {
   // Excel export functions
   const exportMovimientosToExcel = () => {
     const data = allMovements.map(m => ({
-      Fecha: m.date.toLocaleString(),
+      Fecha: formatFullDate(m.date),
       Tipo: m.type,
       Categoría: m.category,
+      Plataforma: m.source ? getPlatformInfo(m.source).label : "—",
       Descripción: m.description,
       Monto: m.type === "Ingreso" ? m.amount : -m.amount
     }))
@@ -128,10 +212,10 @@ export function ReportesView() {
 
   const exportCortesToExcel = () => {
     const data = shifts.map(s => ({
-      Fecha: new Date(s.openedAt).toLocaleDateString(),
+      Fecha: formatDateOnly(new Date(s.openedAt)),
       Usuario: s.userName || "—",
-      Apertura: new Date(s.openedAt).toLocaleTimeString(),
-      Cierre: s.closedAt ? new Date(s.closedAt).toLocaleTimeString() : "—",
+      Apertura: new Date(s.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      Cierre: s.closedAt ? new Date(s.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—",
       "Fondo Inicial": s.startAmount || 0,
       "Efectivo Esperado": s.expectedCash || 0,
       "Efectivo Real": s.endAmount ?? "—",
@@ -147,8 +231,18 @@ export function ReportesView() {
   return (
     <div className="flex flex-col gap-6 pb-10">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold tracking-tight">Análisis Financiero</h2>
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Análisis Financiero</h2>
+          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            Fecha: {formatDateOnly(new Date())} · Última actualización: {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            {isRefreshing && <RefreshCw className="h-3 w-3 animate-spin ml-1" />}
+          </p>
+        </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" onClick={refreshData} disabled={isRefreshing} title="Actualizar ahora">
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          </Button>
           <Calendar className="h-4 w-4 text-muted-foreground" />
           <Select value={period} onValueChange={(v: any) => setPeriod(v)}>
             <SelectTrigger className="w-[180px]">
@@ -188,6 +282,7 @@ export function ReportesView() {
       <Tabs defaultValue="movimientos" className="w-full">
         <TabsList>
           <TabsTrigger value="movimientos">Movimientos</TabsTrigger>
+          <TabsTrigger value="plataformas">Plataformas</TabsTrigger>
           <TabsTrigger value="cortes">Cortes de Caja</TabsTrigger>
         </TabsList>
 
@@ -223,7 +318,7 @@ export function ReportesView() {
                       ) : (
                         allMovements.slice(0, 20).map((m) => (
                           <TableRow key={m.id}>
-                            <TableCell className="text-xs">{m.date.toLocaleTimeString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</TableCell>
+                            <TableCell className="text-xs">{formatFullDate(m.date)}</TableCell>
                             <TableCell>
                               <Badge variant={m.type === "Ingreso" ? "success" as any : "destructive" as any} className="text-[10px] px-1.5 py-0">
                                 {m.type}
@@ -252,7 +347,7 @@ export function ReportesView() {
                       <DollarSign className="h-5 w-5" />
                     </div>
                     <div className="flex-1">
-                      <div className="flex justify-between text-sm mb-1"><span>Efectivo</span><span className="font-medium">${cash}</span></div>
+                      <div className="flex justify-between text-sm mb-1"><span>Efectivo</span><span className="font-medium">${cash.toLocaleString()}</span></div>
                       <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
                         <div className="bg-green-500 h-full" style={{ width: `${totalIncome > 0 ? (cash / totalIncome) * 100 : 0}%` }} />
                       </div>
@@ -263,7 +358,7 @@ export function ReportesView() {
                       <CreditCard className="h-5 w-5" />
                     </div>
                     <div className="flex-1">
-                      <div className="flex justify-between text-sm mb-1"><span>Tarjeta</span><span className="font-medium">${card}</span></div>
+                      <div className="flex justify-between text-sm mb-1"><span>Tarjeta</span><span className="font-medium">${card.toLocaleString()}</span></div>
                       <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
                         <div className="bg-blue-500 h-full" style={{ width: `${totalIncome > 0 ? (card / totalIncome) * 100 : 0}%` }} />
                       </div>
@@ -291,6 +386,121 @@ export function ReportesView() {
                     <span className="text-muted-foreground">Mermas (Pérdida)</span>
                     <span className="font-bold text-red-500">${wasteCosts.toLocaleString()}</span>
                   </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* --- Ventas por Plataforma Tab --- */}
+        <TabsContent value="plataformas" className="mt-4">
+          <div className="grid gap-6 lg:grid-cols-3">
+            {/* Summary cards */}
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Globe className="h-5 w-5 text-purple-500" />
+                  Ventas por Plataforma
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Desglose de ingresos por canal de venta
+                </p>
+              </CardHeader>
+              <CardContent>
+                {platformSales.length === 0 ? (
+                  <div className="h-24 flex items-center justify-center text-muted-foreground text-sm">
+                    Sin ventas registradas en este periodo
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-5">
+                    {platformSales.map(p => {
+                      const pct = totalIncome > 0 ? (p.amount / totalIncome) * 100 : 0
+                      const orderCount = closed.filter(o => (o.source || "direct") === p.source).length
+                      return (
+                        <div key={p.source} className="flex flex-col gap-1.5">
+                          <div className="flex items-center justify-between text-sm">
+                            <div className="flex items-center gap-2">
+                              <div className={`h-3 w-3 rounded-full ${p.bg}`} />
+                              <span className="font-medium">{p.label}</span>
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-1">
+                                {orderCount} {orderCount === 1 ? "orden" : "órdenes"}
+                              </Badge>
+                            </div>
+                            <span className="font-bold">${p.amount.toLocaleString()}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 bg-secondary h-2 rounded-full overflow-hidden">
+                              <div className={`${p.bg} h-full rounded-full transition-all`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <span className="text-xs text-muted-foreground w-12 text-right">{pct.toFixed(1)}%</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="flex flex-col gap-6">
+              {/* Online sales summary card */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Resumen Plataformas en Línea</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <div className="flex justify-between items-center text-sm border-b pb-2">
+                    <span className="text-muted-foreground">Total Ventas en Línea</span>
+                    <span className="font-bold text-purple-600">${onlineSalesTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm border-b pb-2">
+                    <span className="text-muted-foreground">Órdenes en Línea</span>
+                    <span className="font-bold">{onlineOrderCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm border-b pb-2">
+                    <span className="text-muted-foreground">% del Total</span>
+                    <span className="font-bold">
+                      {totalIncome > 0 ? ((onlineSalesTotal / totalIncome) * 100).toFixed(1) : "0.0"}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Ticket Promedio en Línea</span>
+                    <span className="font-bold">
+                      ${onlineOrderCount > 0 ? Math.round(onlineSalesTotal / onlineOrderCount).toLocaleString() : "0"}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Platform detail list */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Detalle por Plataforma</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {platformSales.filter(p => p.source !== "direct").length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      Sin ventas en plataformas en línea
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {platformSales.filter(p => p.source !== "direct").map(p => {
+                        const orderCount = closed.filter(o => o.source === p.source).length
+                        return (
+                          <div key={p.source} className="flex items-center gap-3 p-2 rounded-lg bg-muted/50">
+                            <div className={`h-8 w-8 flex items-center justify-center rounded-full ${p.bg}/10 ${p.color}`}>
+                              <Globe className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1">
+                              <p className="text-sm font-medium">{p.label}</p>
+                              <p className="text-xs text-muted-foreground">{orderCount} órdenes</p>
+                            </div>
+                            <p className="text-sm font-bold">${p.amount.toLocaleString()}</p>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -333,7 +543,7 @@ export function ReportesView() {
                       shifts.map((s) => (
                         <TableRow key={s.id}>
                           <TableCell className="text-xs font-medium">
-                            {new Date(s.openedAt).toLocaleDateString([], { day: '2-digit', month: 'short' })}
+                            {formatDateOnly(new Date(s.openedAt))}
                           </TableCell>
                           <TableCell className="text-xs">{s.userName || "—"}</TableCell>
                           <TableCell className="text-xs">

@@ -1043,7 +1043,7 @@ export async function getConfigLists() {
 
 export async function ensureDefaultLists() {
     try {
-        const existing = await prisma.configList.findMany()
+        const existing = await prisma.configList.findMany({ include: { items: true } })
         const defaults = [
             {
                 name: "order_sources", items: [
@@ -1071,13 +1071,26 @@ export async function ensureDefaultLists() {
         ]
 
         for (const def of defaults) {
-            if (!existing.find(e => e.name === def.name)) {
+            const existingList = existing.find(e => e.name === def.name)
+            if (!existingList) {
                 await prisma.configList.create({
                     data: {
                         name: def.name,
                         items: { create: def.items }
                     }
                 })
+            } else {
+                // Add missing items to existing list
+                const existingValues = existingList.items.map(i => i.value)
+                const missingItems = def.items.filter(i => !existingValues.includes(i.value))
+                if (missingItems.length > 0) {
+                    await prisma.configListItem.createMany({
+                        data: missingItems.map(item => ({
+                            ...item,
+                            configListId: existingList.id
+                        }))
+                    })
+                }
             }
         }
 
@@ -1452,5 +1465,110 @@ export async function updateBusinessConfig(data: any) {
     } catch (e) {
         console.error(e)
         return { success: false, error: "Failed to update business config" }
+    }
+}
+
+// --- Report Data Polling ---
+
+export async function fetchReportData() {
+    try {
+        const thirtyDaysAgo = new Date()
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+        const [orders, supplyMovements, cashShifts, supplies] = await Promise.all([
+            prisma.order.findMany({
+                where: {
+                    OR: [
+                        { status: 'open' },
+                        { createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } }
+                    ]
+                },
+                include: { items: { include: { extras: true, product: true } } },
+                orderBy: { createdAt: 'desc' }
+            }),
+            prisma.supplyMovement.findMany({ orderBy: { createdAt: 'desc' }, take: 50 }),
+            prisma.cashShift.findMany({
+                where: {
+                    OR: [
+                        { status: "open" },
+                        { openedAt: { gte: thirtyDaysAgo } }
+                    ]
+                },
+                include: { user: true },
+                orderBy: { openedAt: 'desc' }
+            }),
+            prisma.supply.findMany()
+        ])
+
+        const serializeDate = (d: Date | null) => d ? d.toISOString() : null
+
+        const employees = await prisma.user.findMany()
+
+        const serializedOrders = orders.map((o: any) => {
+            const createdByEmployee = employees.find((e: any) => e.id === o.createdById)
+            const closedByEmployee = employees.find((e: any) => e.id === o.closedById)
+            return {
+                id: o.id,
+                tableId: o.tableId,
+                tableNumber: o.tableNumber,
+                status: o.status,
+                total: o.total,
+                paymentMethod: o.paymentMethod,
+                source: o.source,
+                createdAt: serializeDate(o.createdAt),
+                closedAt: serializeDate(o.closedAt),
+                transactionFolio: o.transactionFolio,
+                invoiced: o.invoiced,
+                tip: o.tip,
+                branchId: o.branchId || null,
+                createdByName: createdByEmployee?.name || null,
+                closedByName: closedByEmployee?.name || null,
+                dinerNames: o.dinerNames || [],
+                items: o.items.map((i: any) => ({
+                    ...i,
+                    removedIngredients: i.removedIngredients as unknown as string[],
+                    product: i.product ? {
+                        ...i.product,
+                        createdAt: serializeDate(i.product.createdAt),
+                        updatedAt: serializeDate(i.product.updatedAt),
+                        unit: i.product.unit,
+                        branchId: i.product.branchId || null,
+                        extras: i.product.extras || [],
+                        ingredients: i.product.ingredients || []
+                    } : undefined,
+                })),
+            }
+        })
+
+        const serializedMovements = supplyMovements.map((m: any) => {
+            const s = supplies.find((sup: any) => sup.id === m.supplyId)
+            return {
+                ...m,
+                createdAt: serializeDate(m.createdAt),
+                supplyName: s?.name || "Desconocido",
+                branchId: s?.branchId || null
+            }
+        })
+
+        const serializedShifts = cashShifts.map((s: any) => ({
+            ...s,
+            openedAt: s.openedAt.toISOString(),
+            closedAt: s.closedAt?.toISOString() || null,
+            status: s.status as "open" | "closed",
+            userName: s.user?.name || "Desconocido",
+            branchId: s.branchId || null
+        }))
+
+        return {
+            success: true,
+            data: {
+                orders: serializedOrders,
+                supplyMovements: serializedMovements,
+                cashShifts: serializedShifts
+            }
+        }
+    } catch (e) {
+        console.error("[fetchReportData] Error:", e)
+        return { success: false, error: "Failed to fetch report data" }
     }
 }

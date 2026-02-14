@@ -142,11 +142,33 @@ export function StoreProvider({ children, initialUser, initialData }: { children
 
   const setView = useCallback((v: ViewId) => {
     if (v !== "menu") setMenuTableId(null)
+    // Validate permission: compute allowed views from current state
+    const role = authState.user?.role as UserRole | undefined
+    if (role) {
+      const listName = `permissions_${role}`
+      const configList = state.configLists.find(l => l.name === listName)
+      let allowed: ViewId[]
+      if (configList && configList.items.length > 0) {
+        allowed = configList.items.filter(i => i.active).map(i => i.value as ViewId)
+      } else {
+        allowed = defaultRolePermissions[role] || []
+      }
+      // "menu" is always accessible if the user has "mesas" (it's a sub-view of mesas)
+      if (v !== "menu" && !allowed.includes(v)) {
+        // Redirect to role home instead
+        const home = (roleHome[role] || "dashboard") as ViewId
+        setViewRaw(allowed.includes(home) ? home : allowed[0] || "dashboard")
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("activeView", allowed.includes(home) ? home : allowed[0] || "dashboard")
+        }
+        return
+      }
+    }
     setViewRaw(v)
     if (typeof window !== "undefined") {
       sessionStorage.setItem("activeView", v)
     }
-  }, [])
+  }, [authState.user, state.configLists])
 
   const openMenu = useCallback((tableId: string) => {
     setMenuTableId(tableId)
