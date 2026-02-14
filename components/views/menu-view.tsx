@@ -213,8 +213,26 @@ export function MenuView() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold">Pedido</span>
                   <Badge variant="secondary" className="text-xs">{items.length + existingItems.length} items</Badge>
+                  {orderSource !== "direct" && (
+                    <Badge className="text-[10px] bg-orange-500/15 text-orange-700 border-orange-500/30">
+                      {sourcesOptions.find(s => s.value === orderSource)?.label || orderSource}
+                    </Badge>
+                  )}
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setShowOrder(false)}><X className="h-4 w-4" /></Button>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30">
+                <Store className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Select value={orderSource} onValueChange={setOrderSource}>
+                  <SelectTrigger className="flex-1 h-8 text-xs">
+                    <SelectValue placeholder="Fuente del pedido" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sourcesOptions.map(s => (
+                      <SelectItem key={s.id} value={s.value}>{s.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <DinerTabs />
@@ -267,19 +285,7 @@ export function MenuView() {
               </div>
               <div className="border-t p-3">
                 <div className="flex justify-between text-base font-bold"><span>Total</span><span>${total}</span></div>
-                <div className="mt-2 flex items-center gap-2">
-                  <Store className="h-4 w-4 text-muted-foreground" />
-                  <Select value={orderSource} onValueChange={setOrderSource}>
-                    <SelectTrigger className="flex-1 h-9">
-                      <SelectValue placeholder="Fuente" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {sourcesOptions.map(s => (
-                        <SelectItem key={s.id} value={s.value}>{s.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {errorMsg && <div className="mb-2 rounded bg-destructive/15 p-2 text-xs text-destructive font-medium border border-destructive/50">{errorMsg}</div>}
                 <Button className="mt-2 w-full gap-2" disabled={items.length === 0 || isPending} onClick={handleSendOrder}>
                   {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   Enviar a cocina
@@ -296,6 +302,24 @@ export function MenuView() {
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold">Pedido</span>
             <Badge variant="secondary" className="ml-auto text-xs">{items.length + existingItems.length} items</Badge>
+          </div>
+          {orderSource !== "direct" && (
+            <Badge className="mt-1 text-[10px] bg-orange-500/15 text-orange-700 border-orange-500/30">
+              {sourcesOptions.find(s => s.value === orderSource)?.label || orderSource}
+            </Badge>
+          )}
+          <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-muted/50">
+            <Store className="h-4 w-4 text-muted-foreground shrink-0" />
+            <Select value={orderSource} onValueChange={setOrderSource}>
+              <SelectTrigger className="flex-1 h-8 text-xs">
+                <SelectValue placeholder="Fuente del pedido" />
+              </SelectTrigger>
+              <SelectContent>
+                {sourcesOptions.map(s => (
+                  <SelectItem key={s.id} value={s.value}>{s.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <DinerTabs />
@@ -349,19 +373,6 @@ export function MenuView() {
         </div>
         <div className="border-t p-3">
           <div className="flex justify-between text-base font-bold"><span>Total</span><span>${total}</span></div>
-          <div className="mt-2 flex items-center gap-2">
-            <Store className="h-4 w-4 text-muted-foreground" />
-            <Select value={orderSource} onValueChange={setOrderSource}>
-              <SelectTrigger className="flex-1 h-9">
-                <SelectValue placeholder="Fuente" />
-              </SelectTrigger>
-              <SelectContent>
-                {sourcesOptions.map(s => (
-                  <SelectItem key={s.id} value={s.value}>{s.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           {errorMsg && <div className="mb-2 rounded bg-destructive/15 p-2 text-xs text-destructive font-medium border border-destructive/50">{errorMsg}</div>}
           <Button className="mt-2 w-full gap-2" disabled={items.length === 0 || isPending} onClick={handleSendOrder}>
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}

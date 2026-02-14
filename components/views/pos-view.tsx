@@ -267,6 +267,20 @@ export function PosView() {
     ) || null
   }, [state.cashShifts, state.currentBranchId])
 
+  // Optimistic update: immediately update cash/card totals in client state
+  function updateShiftOptimistic(method: "cash" | "card", amount: number) {
+    if (!currentShift) return
+    const updated = state.cashShifts.map(s => {
+      if (s.id !== currentShift.id) return s
+      return {
+        ...s,
+        expectedCash: method === "cash" ? (s.expectedCash || s.startAmount || 0) + amount : s.expectedCash,
+        expectedCard: method === "card" ? (s.expectedCard || 0) + amount : s.expectedCard,
+      }
+    })
+    dispatch({ type: "SET_CASH_SHIFTS", payload: updated })
+  }
+
   const openOrders = state.orders.filter(o => o.status === "open" && o.tableId && o.branchId === state.currentBranchId)
 
 
@@ -328,6 +342,7 @@ export function PosView() {
         startTransition(async () => {
           const res = await closeOrder(selOrder.id, "cash", mTip, "")
           if (res.success) {
+            updateShiftOptimistic("cash", mTotal)
             setSelId(null); setMTipPct(0); setMTipFixed("")
             setShowCashDialog(false)
             router.refresh()
@@ -345,6 +360,7 @@ export function PosView() {
     startTransition(async () => {
       const res = await closeOrder(selOrder.id, method, mTip, folio)
       if (res.success) {
+        updateShiftOptimistic(method, mTotal)
         setSelId(null); setMTipPct(0); setMTipFixed("")
         router.refresh()
       }
@@ -379,6 +395,7 @@ export function PosView() {
         startTransition(async () => {
           const res = await processDirectSale(dItems, "cash", dTip, "", dSource, state.currentBranchId || undefined)
           if (res.success) {
+            updateShiftOptimistic("cash", dTotal)
             setDItems([]); setDTipPct(0); setDTipFixed(""); setDTipMode("percent"); setDSource("direct")
             setShowCashDialog(false)
             router.refresh()
@@ -403,6 +420,7 @@ export function PosView() {
       } else {
         const res = await processDirectSale(dItems, method, dTip, folio, dSource, state.currentBranchId || undefined)
         if (res.success) {
+          updateShiftOptimistic(method, dTotal)
           setDItems([]); setDTipPct(0); setDTipFixed(""); setDTipMode("percent"); setDSource("direct")
           router.refresh()
         }
