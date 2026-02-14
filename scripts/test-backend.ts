@@ -39,7 +39,6 @@ async function main() {
                 name: "Test Burger",
                 category: "Food",
                 price: 15.0,
-                stock: 100,
                 available: true
             }
         })

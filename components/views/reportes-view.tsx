@@ -1,31 +1,37 @@
 "use client"
 
-import { useState, useMemo, useEffect, useCallback, useRef } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import { useStore } from "@/lib/spa-store"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { DollarSign, ShoppingBag, TrendingUp, CreditCard, ArrowDownRight, ArrowUpRight, Calendar, Clock, Package, Download, Globe, RefreshCw } from "lucide-react"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { DollarSign, ShoppingBag, TrendingUp, CreditCard, ArrowDownRight, ArrowUpRight, Clock, Package, Download, Globe, RefreshCw } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import * as XLSX from "xlsx"
-import { fetchReportData } from "@/lib/actions"
+import { getHistoricalReports } from "@/lib/actions"
+import { DatePickerWithRange } from "@/components/ui/date-range-picker"
+import { DateRange } from "react-day-picker"
+import { startOfDay, endOfDay, subDays } from "date-fns"
+import { toast } from "sonner"
+import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Area, AreaChart, CartesianGrid } from "recharts"
 
 // --- Date formatting helpers ---
 function formatFullDate(date: Date): string {
-  const day = date.getDate().toString().padStart(2, "0")
-  const month = (date.getMonth() + 1).toString().padStart(2, "0")
-  const year = date.getFullYear()
-  const hours = date.getHours().toString().padStart(2, "0")
-  const minutes = date.getMinutes().toString().padStart(2, "0")
+  const d = new Date(date)
+  const day = d.getDate().toString().padStart(2, "0")
+  const month = (d.getMonth() + 1).toString().padStart(2, "0")
+  const year = d.getFullYear()
+  const hours = d.getHours().toString().padStart(2, "0")
+  const minutes = d.getMinutes().toString().padStart(2, "0")
   return `${day}/${month}/${year} ${hours}:${minutes}`
 }
 
 function formatDateOnly(date: Date): string {
-  const day = date.getDate().toString().padStart(2, "0")
-  const month = (date.getMonth() + 1).toString().padStart(2, "0")
-  const year = date.getFullYear()
+  const d = new Date(date)
+  const day = d.getDate().toString().padStart(2, "0")
+  const month = (d.getMonth() + 1).toString().padStart(2, "0")
+  const year = d.getFullYear()
   return `${day}/${month}/${year}`
 }
 
@@ -42,96 +48,84 @@ function getPlatformInfo(source: string | null) {
 }
 
 export function ReportesView() {
-  const { state, dispatch } = useStore()
-  const [period, setPeriod] = useState<"day" | "week" | "month">("day")
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const { state } = useStore()
+  const [dateRange, setDateRange] = useState<DateRange | undefined>({
+    from: startOfDay(new Date()),
+    to: endOfDay(new Date())
+  })
 
-  // --- Auto-refresh polling ---
-  const refreshData = useCallback(async () => {
-    setIsRefreshing(true)
+  const [reportData, setReportData] = useState<{
+    orders: any[],
+    supplyMovements: any[],
+    cashShifts: any[]
+  }>({ orders: [], supplyMovements: [], cashShifts: [] })
+
+  const [isLoading, setIsLoading] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
+
+  const loadData = useCallback(async () => {
+    if (!dateRange?.from) return
+
+    setIsLoading(true)
     try {
-      const result = await fetchReportData()
-      if (result.success && result.data) {
-        dispatch({ type: "SET_ORDERS", payload: result.data.orders as any })
-        dispatch({ type: "SET_SUPPLY_MOVEMENTS", payload: result.data.supplyMovements as any })
-        dispatch({ type: "SET_CASH_SHIFTS", payload: result.data.cashShifts as any })
+      const from = dateRange.from
+      const to = dateRange.to || dateRange.from // If no end date, assume single day
+
+      const res = await getHistoricalReports(from, to)
+      if (res.success && res.data) {
+        setReportData(res.data)
         setLastUpdated(new Date())
+      } else {
+        toast.error("Error al cargar datos históricos")
       }
-    } catch (err) {
-      console.error("[ReportesView] Refresh error:", err)
+    } catch (e) {
+      console.error(e)
+      toast.error("Error de conexión")
     } finally {
-      setIsRefreshing(false)
+      setIsLoading(false)
     }
-  }, [dispatch])
+  }, [dateRange])
 
   useEffect(() => {
-    intervalRef.current = setInterval(refreshData, 15000) // 15 seconds
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [refreshData])
+    loadData()
+  }, [loadData])
 
-  // Filter logic (includes branch filtering)
+  // Filter Logic
   const filteredData = useMemo(() => {
-    const now = new Date()
-    const startOfPeriod = new Date()
+    // Filter by branch
+    const orders = reportData.orders.filter(o => o.branchId === state.currentBranchId)
+    const movements = reportData.supplyMovements.filter(m => m.branchId === state.currentBranchId)
+    const shifts = reportData.cashShifts.filter(s => s.branchId === state.currentBranchId)
 
-    if (period === "day") {
-      startOfPeriod.setHours(0, 0, 0, 0)
-    } else if (period === "week") {
-      startOfPeriod.setDate(now.getDate() - now.getDay())
-      startOfPeriod.setHours(0, 0, 0, 0)
-    } else if (period === "month") {
-      startOfPeriod.setDate(1)
-      startOfPeriod.setHours(0, 0, 0, 0)
-    }
-
-    // Filter by branch first, then by period
-    const branchOrders = state.orders.filter(o =>
-      (o as any).branchId === state.currentBranchId
-    )
-    const filteredOrders = branchOrders.filter(o =>
-      o.status === "closed" && new Date(o.createdAt) >= startOfPeriod
-    )
-
-    const filteredMovements = state.supplyMovements.filter(m =>
-      (m as any).branchId === state.currentBranchId &&
-      new Date(m.createdAt) >= startOfPeriod
-    )
-
-    // Filter cash shifts by branch
-    const branchShifts = state.cashShifts.filter(s =>
-      (s as any).branchId === state.currentBranchId
-    )
-    const filteredShifts = branchShifts.filter(s =>
-      new Date(s.openedAt) >= startOfPeriod
-    )
-
-    return { orders: filteredOrders, movements: filteredMovements, shifts: filteredShifts }
-  }, [state.orders, state.supplyMovements, state.cashShifts, state.currentBranchId, period])
-
+    return { orders, movements, shifts }
+  }, [reportData, state.currentBranchId])
 
   const { orders: closed, movements, shifts } = filteredData
 
+  // --- KPIs ---
   const totalIncome = closed.reduce((s, o) => s + o.total, 0)
 
-  // Calculate supply costs separately
+  // Costs
   const supplyCosts = movements
     .filter(m => m.type === "exit")
     .reduce((acc, m) => {
-      const supply = state.supplies.find(s => s.id === m.supplyId)
-      const cost = supply ? m.quantity * supply.costPerUnit : 0
-      return acc + cost
+      // We need supply cost info. 
+      // Currently actions.ts returns partial supply info in movement, or we rely on state.supplies?
+      // getHistoricalReports joins supply info but let's check what it returns.
+      // It returns `supplyName` but not cost. We need to look up cost in `state.supplies`
+      const supply = state.supplies.find(s => s.name === m.supplyName) // Fallback by name if ID matches?
+      // Actually `getHistoricalReports` returns `supplyName` and `branchId`. 
+      // Better to use state.supplies to find costPerUnit.
+      // We need supplyID. `getHistoricalReports` returns `supplyId`.
+      const s = state.supplies.find(sup => sup.id === m.supplyId)
+      return acc + (s ? m.quantity * s.costPerUnit : 0)
     }, 0)
 
   const wasteCosts = movements
     .filter(m => m.type === "waste")
     .reduce((acc, m) => {
-      const supply = state.supplies.find(s => s.id === m.supplyId)
-      const cost = supply ? m.quantity * supply.costPerUnit : 0
-      return acc + cost
+      const s = state.supplies.find(sup => sup.id === m.supplyId)
+      return acc + (s ? m.quantity * s.costPerUnit : 0)
     }, 0)
 
   const totalExpenses = supplyCosts + wasteCosts
@@ -140,30 +134,56 @@ export function ReportesView() {
   const cash = closed.filter(o => o.paymentMethod === "cash").reduce((s, o) => s + o.total, 0)
   const card = closed.filter(o => o.paymentMethod === "card").reduce((s, o) => s + o.total, 0)
 
-  // --- Platform sales breakdown ---
+  // --- Charts Data ---
+
+  // Hourly Sales
+  const hourlyData = useMemo(() => {
+    const hours = Array(24).fill(0).map((_, i) => ({ hour: i, total: 0, count: 0 }))
+    closed.forEach(o => {
+      const h = new Date(o.createdAt).getHours()
+      hours[h].total += o.total
+      hours[h].count += 1
+    })
+    return hours.map(h => ({
+      hour: `${h.hour}:00`,
+      Ventas: h.total,
+      Órdenes: h.count
+    }))
+  }, [closed])
+
+  // Top Products
+  const topProducts = useMemo(() => {
+    const products: Record<string, { name: string, qty: number, total: number }> = {}
+    closed.forEach(o => {
+      o.items.forEach((i: any) => {
+        if (!products[i.productName]) {
+          products[i.productName] = { name: i.productName, qty: 0, total: 0 }
+        }
+        products[i.productName].qty += i.quantity
+        products[i.productName].total += i.totalPrice
+      })
+    })
+    return Object.values(products)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10)
+  }, [closed])
+
+  // Platform Sales
   const platformSales = useMemo(() => {
     const breakdown: Record<string, number> = {}
     closed.forEach(o => {
       const src = o.source || "direct"
       breakdown[src] = (breakdown[src] || 0) + o.total
     })
-    // Sort by amount descending
     return Object.entries(breakdown)
       .map(([source, amount]) => ({ source, amount, ...getPlatformInfo(source) }))
       .sort((a, b) => b.amount - a.amount)
   }, [closed])
 
-  const onlineSalesTotal = useMemo(() => {
-    return platformSales
-      .filter(p => p.source !== "direct")
-      .reduce((sum, p) => sum + p.amount, 0)
-  }, [platformSales])
+  const onlineSalesTotal = platformSales.filter(p => p.source !== "direct").reduce((s, p) => s + p.amount, 0)
+  const onlineOrderCount = closed.filter(o => o.source && o.source !== "direct").length
 
-  const onlineOrderCount = useMemo(() => {
-    return closed.filter(o => o.source && o.source !== "direct").length
-  }, [closed])
-
-  // Movements for history table
+  // Movements List
   const allMovements = useMemo(() => {
     const saleLogs = closed.map(o => ({
       id: o.id,
@@ -186,77 +206,111 @@ export function ReportesView() {
           type: "Egreso",
           category: m.type === "waste" ? "Merma" : "Insumo",
           amount: cost,
-          description: `${m.supplyName} (${m.quantity} ${supply?.unit || ""})`,
+          description: `${m.supplyName || "Insumo"} (${m.quantity} ${supply?.unit || ""})`,
           source: ""
         }
       })
-
+    // Sort reverse chronological
     return [...saleLogs, ...expenseLogs].sort((a, b) => b.date.getTime() - a.date.getTime())
   }, [closed, movements, state.supplies])
 
-  // Excel export functions
+
+  // --- Export Functions ---
   const exportMovimientosToExcel = () => {
-    const data = allMovements.map(m => ({
-      Fecha: formatFullDate(m.date),
-      Tipo: m.type,
-      Categoría: m.category,
-      Plataforma: m.source ? getPlatformInfo(m.source).label : "—",
-      Descripción: m.description,
-      Monto: m.type === "Ingreso" ? m.amount : -m.amount
-    }))
-    const ws = XLSX.utils.json_to_sheet(data)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "Movimientos")
-    XLSX.writeFile(wb, `movimientos_${period}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    try {
+      if (allMovements.length === 0) {
+        toast.error("No hay datos para exportar")
+        return
+      }
+
+      const data = allMovements.map(m => ({
+        Fecha: formatFullDate(m.date),
+        Tipo: m.type,
+        Categoría: m.category,
+        Plataforma: m.source ? getPlatformInfo(m.source).label : "—",
+        Descripción: m.description,
+        Monto: m.type === "Ingreso" ? m.amount : -m.amount
+      }))
+
+      const ws = XLSX.utils.json_to_sheet(data)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "Movimientos")
+      const fileName = `movimientos_${formatDateOnly(dateRange?.from || new Date()).replace(/\//g, "-")}.xlsx`
+      XLSX.writeFile(wb, fileName)
+      toast.success("Exportación exitosa")
+    } catch (e) {
+      console.error(e)
+      toast.error("Error al exportar Excel")
+    }
   }
 
   const exportCortesToExcel = () => {
-    const data = shifts.map(s => ({
-      Fecha: formatDateOnly(new Date(s.openedAt)),
-      Usuario: s.userName || "—",
-      Apertura: new Date(s.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      Cierre: s.closedAt ? new Date(s.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—",
-      "Fondo Inicial": s.startAmount || 0,
-      "Efectivo Esperado": s.expectedCash || 0,
-      "Efectivo Real": s.endAmount ?? "—",
-      Diferencia: s.difference ?? "—",
-      Estado: s.status === "open" ? "Abierto" : "Cerrado"
-    }))
-    const ws = XLSX.utils.json_to_sheet(data)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "Cortes de Caja")
-    XLSX.writeFile(wb, `cortes_caja_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    try {
+      if (shifts.length === 0) {
+        toast.error("No hay cortes para exportar")
+        return
+      }
+
+      const data = shifts.map(s => ({
+        Fecha: formatDateOnly(new Date(s.openedAt)),
+        Usuario: s.userName || "—",
+        Apertura: new Date(s.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        Cierre: s.closedAt ? new Date(s.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—",
+        "Fondo Inicial": s.startAmount || 0,
+        "Efectivo Esperado": s.expectedCash || 0,
+        "Efectivo Real": s.endAmount ?? "—",
+        Diferencia: s.difference ?? "—",
+        Estado: s.status === "open" ? "Abierto" : "Cerrado"
+      }))
+
+      const ws = XLSX.utils.json_to_sheet(data)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "Cortes de Caja")
+      XLSX.writeFile(wb, `cortes_caja_${formatDateOnly(new Date()).replace(/\//g, "-")}.xlsx`)
+      toast.success("Exportación exitosa")
+    } catch (e) {
+      console.error(e)
+      toast.error("Error al exportar")
+    }
   }
+
+  const exportTopProducts = () => {
+    try {
+      if (topProducts.length === 0) return toast.error("No hay datos")
+      const data = topProducts.map(p => ({
+        Producto: p.name,
+        Cantidad: p.qty,
+        Total: p.total
+      }))
+      const ws = XLSX.utils.json_to_sheet(data)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "Top Productos")
+      XLSX.writeFile(wb, `top_productos.xlsx`)
+      toast.success("Exportación exitosa")
+    } catch (e) { toast.error("Error al exportar") }
+  }
+
 
   return (
     <div className="flex flex-col gap-6 pb-10">
-      <div className="flex items-center justify-between">
+      {/* Header & Controls */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Análisis Financiero</h2>
           <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            Fecha: {formatDateOnly(new Date())} · Última actualización: {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            {isRefreshing && <RefreshCw className="h-3 w-3 animate-spin ml-1" />}
+            Última actualización: {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={refreshData} disabled={isRefreshing} title="Actualizar ahora">
-            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          <Button variant="ghost" size="icon" onClick={() => loadData()} disabled={isLoading} title="Actualizar ahora">
+            <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
-          <Calendar className="h-4 w-4 text-muted-foreground" />
-          <Select value={period} onValueChange={(v: any) => setPeriod(v)}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Periodo" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="day">Hoy</SelectItem>
-              <SelectItem value="week">Esta Semana</SelectItem>
-              <SelectItem value="month">Este Mes</SelectItem>
-            </SelectContent>
-          </Select>
+          <DatePickerWithRange date={dateRange} setDate={setDateRange} className="w-full sm:w-auto" />
         </div>
       </div>
 
+      {/* KPIs */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         {[
           { label: "Ingresos Totales", value: `$${totalIncome.toLocaleString()}`, icon: ArrowUpRight, color: "text-green-500", bg: "bg-green-500/10" },
@@ -279,9 +333,11 @@ export function ReportesView() {
         ))}
       </div>
 
+      {/* Main Content Tabs */}
       <Tabs defaultValue="movimientos" className="w-full">
         <TabsList>
           <TabsTrigger value="movimientos">Movimientos</TabsTrigger>
+          <TabsTrigger value="estadisticas">Estadísticas</TabsTrigger>
           <TabsTrigger value="plataformas">Plataformas</TabsTrigger>
           <TabsTrigger value="cortes">Cortes de Caja</TabsTrigger>
         </TabsList>
@@ -292,14 +348,14 @@ export function ReportesView() {
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle className="text-lg">Historial de Movimientos</CardTitle>
-                  <p className="text-sm text-muted-foreground">Ingresos y egresos detallados</p>
+                  <p className="text-sm text-muted-foreground">Ingresos y egresos detallados del periodo</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={exportMovimientosToExcel} disabled={allMovements.length === 0}>
                   <Download className="h-4 w-4 mr-2" />Exportar Excel
                 </Button>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border">
+                <div className="rounded-md border max-h-[500px] overflow-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -316,16 +372,16 @@ export function ReportesView() {
                           <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">Sin movimientos en este periodo</TableCell>
                         </TableRow>
                       ) : (
-                        allMovements.slice(0, 20).map((m) => (
+                        allMovements.map((m) => (
                           <TableRow key={m.id}>
-                            <TableCell className="text-xs">{formatFullDate(m.date)}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">{formatFullDate(m.date)}</TableCell>
                             <TableCell>
                               <Badge variant={m.type === "Ingreso" ? "success" as any : "destructive" as any} className="text-[10px] px-1.5 py-0">
                                 {m.type}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-xs">{m.category}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate">{m.description}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate" title={m.description}>{m.description}</TableCell>
                             <TableCell className={`text-right font-medium ${m.type === "Ingreso" ? "text-green-600" : "text-red-600"}`}>
                               {m.type === "Ingreso" ? "+" : "-"}${m.amount.toLocaleString()}
                             </TableCell>
@@ -366,36 +422,71 @@ export function ReportesView() {
                   </div>
                 </CardContent>
               </Card>
-
-              <Card>
-                <CardHeader><CardTitle className="text-base">Métricas de Operación</CardTitle></CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                  <div className="flex justify-between items-center text-sm border-b pb-2">
-                    <span className="text-muted-foreground">Órdenes Finalizadas</span>
-                    <span className="font-bold">{closed.length}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm border-b pb-2">
-                    <span className="text-muted-foreground">Cortes de Caja</span>
-                    <span className="font-bold">{shifts.length}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm border-b pb-2">
-                    <span className="text-muted-foreground">Gastos Insumos</span>
-                    <span className="font-bold text-orange-500">${supplyCosts.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-muted-foreground">Mermas (Pérdida)</span>
-                    <span className="font-bold text-red-500">${wasteCosts.toLocaleString()}</span>
-                  </div>
-                </CardContent>
-              </Card>
             </div>
           </div>
         </TabsContent>
 
-        {/* --- Ventas por Plataforma Tab --- */}
+        {/* Tab: Estadísticas (NEW) */}
+        <TabsContent value="estadisticas" className="mt-4">
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Hourly Sales Chart */}
+            <Card className="col-span-2 md:col-span-1">
+              <CardHeader>
+                <CardTitle>Ventas por Hora</CardTitle>
+                <p className="text-sm text-muted-foreground">Distribución de ventas durante el día</p>
+              </CardHeader>
+              <CardContent className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={hourlyData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="hour" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `$${value}`} />
+                    <Tooltip
+                      formatter={(value: number) => [`$${value.toLocaleString()}`, "Ventas"]}
+                      contentStyle={{ borderRadius: '8px' }}
+                    />
+                    <Area type="monotone" dataKey="Ventas" stroke="#0ea5e9" fill="#0ea5e9" fillOpacity={0.2} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            {/* Top Products */}
+            <Card className="col-span-2 md:col-span-1">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Productos Más Vendidos</CardTitle>
+                  <p className="text-sm text-muted-foreground">Top 10 productos por ingresos</p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={exportTopProducts}>
+                  <Download className="h-4 w-4" />
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {topProducts.map((p, i) => (
+                    <div key={p.name} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-6 w-6 flex items-center justify-center rounded bg-secondary text-xs font-medium text-muted-foreground">
+                          {i + 1}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium">{p.name}</p>
+                          <p className="text-xs text-muted-foreground">{p.qty} unidades</p>
+                        </div>
+                      </div>
+                      <p className="text-sm font-bold">${p.total.toLocaleString()}</p>
+                    </div>
+                  ))}
+                  {topProducts.length === 0 && <p className="text-center text-muted-foreground text-sm">Sin datos</p>}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         <TabsContent value="plataformas" className="mt-4">
           <div className="grid gap-6 lg:grid-cols-3">
-            {/* Summary cards */}
             <Card className="lg:col-span-2">
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
@@ -443,7 +534,6 @@ export function ReportesView() {
             </Card>
 
             <div className="flex flex-col gap-6">
-              {/* Online sales summary card */}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Resumen Plataformas en Línea</CardTitle>
@@ -463,44 +553,6 @@ export function ReportesView() {
                       {totalIncome > 0 ? ((onlineSalesTotal / totalIncome) * 100).toFixed(1) : "0.0"}%
                     </span>
                   </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-muted-foreground">Ticket Promedio en Línea</span>
-                    <span className="font-bold">
-                      ${onlineOrderCount > 0 ? Math.round(onlineSalesTotal / onlineOrderCount).toLocaleString() : "0"}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Platform detail list */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Detalle por Plataforma</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {platformSales.filter(p => p.source !== "direct").length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      Sin ventas en plataformas en línea
-                    </p>
-                  ) : (
-                    <div className="flex flex-col gap-3">
-                      {platformSales.filter(p => p.source !== "direct").map(p => {
-                        const orderCount = closed.filter(o => o.source === p.source).length
-                        return (
-                          <div key={p.source} className="flex items-center gap-3 p-2 rounded-lg bg-muted/50">
-                            <div className={`h-8 w-8 flex items-center justify-center rounded-full ${p.bg}/10 ${p.color}`}>
-                              <Globe className="h-4 w-4" />
-                            </div>
-                            <div className="flex-1">
-                              <p className="text-sm font-medium">{p.label}</p>
-                              <p className="text-xs text-muted-foreground">{orderCount} órdenes</p>
-                            </div>
-                            <p className="text-sm font-bold">${p.amount.toLocaleString()}</p>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
                 </CardContent>
               </Card>
             </div>

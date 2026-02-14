@@ -1,0 +1,13 @@
+{
+    "name": "local-print-service",
+    "version": "1.0.0",
+    "description": "Local Node.js service for raw printing",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "cors": "^2.8.5"
+    }
+}
